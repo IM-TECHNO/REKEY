@@ -122,7 +122,8 @@ Paths longer than 512 characters are refused with 422.
    /64. Fine for a small deployment; a shared store and prefix grouping would be needed at scale.
 7. **`/v1/sys/status` is unauthenticated** and shows initialised, sealed, threshold and progress.
 8. **The audit chain is plain SHA-256.** A database administrator could rewrite history and recompute
-   it. Ship the head hash somewhere they cannot reach (not automated yet).
+   it. Audit anchoring (added after this review, see OPERATIONS.md) copies the head hash elsewhere,
+   but only if you configure it and keep the copy out of that administrator's reach.
 9. **A rekey swaps keys under the running process.** A request in flight at that instant may fail
    once and can be retried.
 10. **Two simultaneous writes to the same secret** can collide on the version number; one gets an

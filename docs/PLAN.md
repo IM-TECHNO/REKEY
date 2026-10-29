@@ -17,6 +17,7 @@ Phase (open source). See [IP-RULES.md](IP-RULES.md): clean-room, nothing copied.
   approvals, unseal screen.
 - Rate limiting and trusted-proxy handling; key rotation (environment and root); approvals for
   protected environments.
+- Audit anchoring: the chain's head hash is copied to a file and/or webhook and checked on verify.
 - Docker images, compose with an nginx edge, Kubernetes manifests, operations runbook.
 
 ## Next (in rough order)
@@ -24,9 +25,8 @@ Phase (open source). See [IP-RULES.md](IP-RULES.md): clean-room, nothing copied.
 1. Try the real GitLab on a dev project (needs the OAuth application and a test pipeline).
 2. Independent review of `server/src/rekey/crypto` and the key handling (a self-review is done:
    [SECURITY-REVIEW-2026-10.md](SECURITY-REVIEW-2026-10.md)).
-3. Ship the audit chain head hash to Loki (or any append-only sink) automatically.
-4. Optional auto-unseal (a KMS or a second operator service), explicitly weighed against the model.
-5. Secret rotation and dynamic secrets (Postgres first), then PKI and SSH certificates, possibly via
+3. Optional auto-unseal (a KMS or a second operator service), explicitly weighed against the model.
+4. Secret rotation and dynamic secrets (Postgres first), then PKI and SSH certificates, possibly via
    OpenBao behind the `SecretStore` boundary.
-6. Secret scanning of repositories; Kubernetes operator / External Secrets provider.
-7. High availability (shared rate-limit store, multiple unsealed replicas).
+5. Secret scanning of repositories; Kubernetes operator / External Secrets provider.
+6. High availability (shared rate-limit store, multiple unsealed replicas).

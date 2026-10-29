@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from rekey import audit, rbac, service
+from rekey import anchor, audit, rbac, service
 from rekey.crypto import InvalidShares, Keyring, SealConfig, initialize
 from rekey.models import AuditEvent, Environment, EnvKey, Grant, Identity, Project, SealRow
 from rekey.ratelimit import RateLimiter, client_ip, limit, too_many
@@ -635,9 +635,21 @@ async def get_audit(
 
 
 @router.get("/audit/verify")
-async def verify_audit(db: DB, _: Admin) -> dict[str, object]:
+async def verify_audit(request: Request, db: DB, _: Admin) -> dict[str, object]:
     v = await audit.verify(db)
-    return {"ok": v.ok, "count": v.count, "head": v.head, "first_bad_seq": v.first_bad_seq}
+    out: dict[str, object] = {
+        "ok": v.ok,
+        "count": v.count,
+        "head": v.head,
+        "first_bad_seq": v.first_bad_seq,
+        "anchors": None,
+    }
+    path = request.app.state.settings.audit_anchor_file
+    if path:
+        a = await anchor.check_anchors(db, path)
+        out["anchors"] = {"checked": a.checked, "mismatched_seqs": a.mismatched}
+        out["ok"] = v.ok and not a.mismatched
+    return out
 
 
 # ---- secrets ------------------------------------------------------------------------------

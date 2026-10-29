@@ -10,6 +10,8 @@ data:
   REKEY_TRUSTED_PROXY_HOPS: "1"
   REKEY_COOKIE_SECURE: "true"
   REKEY_CI_AUDIENCE: "rekey"
+  # Audit anchoring (docs/OPERATIONS.md): https URL receiving the audit head hash. Empty = off.
+  REKEY_AUDIT_ANCHOR_WEBHOOK: ""
   # GitLab login (docs/GITLAB-SETUP.md). The client secret goes in the Secret, not here.
   REKEY_OIDC_ISSUER: "https://gitlab.example.com"
   REKEY_OIDC_CLIENT_ID: "replace-with-gitlab-application-id"

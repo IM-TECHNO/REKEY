@@ -74,6 +74,7 @@ export type Verification = {
   count: number;
   head: string;
   first_bad_seq: number | null;
+  anchors: { checked: number; mismatched_seqs: number[] } | null;
 };
 
 export type ChangeRequestInfo = {

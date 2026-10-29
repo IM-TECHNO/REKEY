@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     # of the window.
     rate_auth_failures_per_5min: int = 20
 
+    # Copy the audit chain's head hash somewhere an administrator of this database cannot rewrite
+    # (see anchor.py). Either or both; both empty = off. The file holds one JSON line per anchor.
+    audit_anchor_file: str = ""
+    audit_anchor_webhook: str = ""  # https URL receiving a JSON POST {ts, seq, head}
+    audit_anchor_token: str = ""  # optional Bearer token sent to the webhook
+    audit_anchor_interval_seconds: int = 300
+
     session_ttl_minutes: int = 720
     ci_session_ttl_minutes: int = 15
 

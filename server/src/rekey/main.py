@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -5,7 +6,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from rekey import service
+from rekey import anchor, service
 from rekey.api import router
 from rekey.auth_api import router as auth_router
 from rekey.changes import router as changes_router
@@ -25,8 +26,16 @@ def create_app(
     http = http_client or httpx.AsyncClient(timeout=10.0, follow_redirects=False)
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
+        task: asyncio.Task[None] | None = None
+        if anchor.enabled(settings):
+            if settings.audit_anchor_webhook:
+                anchor.check_webhook_url(settings.audit_anchor_webhook)
+            task = asyncio.create_task(anchor.run_forever(settings, app_.state.sessionmaker, http))
         yield
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         if owns_client:
             await http.aclose()
 

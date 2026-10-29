@@ -71,8 +71,11 @@ export default function AuditPage() {
             {check && (
               <span className={`text-xs ${check.ok ? "text-ok" : "text-danger"}`}>
                 {check.ok
-                  ? `Chain intact · ${check.count} events · head ${check.head.slice(0, 12)}…`
-                  : `Chain broken at event ${check.first_bad_seq}`}
+                  ? `Chain intact · ${check.count} events · head ${check.head.slice(0, 12)}…` +
+                    (check.anchors ? ` · ${check.anchors.checked} anchors match` : "")
+                  : check.first_bad_seq !== null
+                    ? `Chain broken at event ${check.first_bad_seq}`
+                    : `History differs from the anchored copy at event ${check.anchors?.mismatched_seqs.join(", ")}`}
               </span>
             )}
             <button className={btnCls} onClick={verify}>Verify chain</button>

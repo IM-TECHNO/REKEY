@@ -110,8 +110,28 @@ restore the backup. After starting, the server is sealed: unseal it.
   a restart is the most common "it's down").
 - The Insights page flags a read from a new IP, bursts of denials and failed logins.
 - The audit log is a hash chain; verify it from the Audit log page. A database administrator could
-  rewrite history and recompute the chain, so copy the **head hash** somewhere they cannot reach
-  (not automated yet; `GET /v1/audit/verify` returns it).
+  rewrite history and recompute the chain, so Rekey can **anchor** the head hash outside the
+  database (see "Audit anchoring" below).
+
+## Audit anchoring
+
+Every `REKEY_AUDIT_ANCHOR_INTERVAL_SECONDS` (default 300, minimum 5), if the chain has grown, Rekey
+copies its head `{ts, seq, head}` to up to two places. Set either or both; both empty = off.
+
+- `REKEY_AUDIT_ANCHOR_WEBHOOK`: an https URL (plain http only for loopback) that receives a JSON POST,
+  with `Authorization: Bearer $REKEY_AUDIT_ANCHOR_TOKEN` if a token is set. Point it at something the
+  database administrator cannot write to: a log collector, a second server, a small append-only
+  service. A failed delivery is retried on the next round.
+- `REKEY_AUDIT_ANCHOR_FILE`: a local path, one JSON line per anchor, appended and fsynced. Put it on
+  another disk or host and make it append-only (`chattr +a` on Linux). In the compose and Kubernetes
+  deployments the API container is read-only, so mount a writable volume for it or use the webhook.
+
+When a file is configured, **Verify chain** (and `GET /v1/audit/verify`) also checks every anchored
+`(seq, head)` against the database. A rewrite that recomputes the whole chain still fails, because
+the copy taken earlier no longer matches; a deleted event does too. The webhook side is checked by
+whoever receives it: compare its stored heads with the same `seq` rows here.
+Anchoring proves history was not changed **after** it was anchored; events newer than the last round
+(up to the interval) are not covered yet.
 
 ## Break glass
 
