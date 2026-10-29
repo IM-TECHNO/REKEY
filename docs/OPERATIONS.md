@@ -194,6 +194,20 @@ restore the backup. After starting, the server is sealed: unseal it.
   unseal 10; 20 wrong credentials in five minutes block that address for the rest of the window. They
   live in the API process's memory (single process).
 
+## Using your own nginx in front
+
+Fine, and usual: terminate TLS on the host's nginx and send everything to the stack's published port.
+
+1. In `.env` set `REKEY_BIND=127.0.0.1` so only the host can reach the stack, and `REKEY_COOKIE_SECURE=true`.
+2. Add the server block from [deploy/nginx/host-nginx.example.conf](../deploy/nginx/host-nginx.example.conf)
+   to your nginx. The one line that matters is `proxy_set_header X-Forwarded-For $remote_addr;`
+   (set it, never append to it): without it Rekey sees your nginx as every client, every user shares
+   one rate limit, and the audit log and Insights show one address.
+3. The stack's own edge believes that header only from Docker's bridge network (`172.16.0.0/12` in
+   `deploy/nginx/rekey.conf`). If `docker network inspect bridge` shows another range, change it there.
+4. Check: sign in, then look at the IP column of the Audit log. It must be your address, not the
+   nginx host's or a `172.x` address.
+
 ## Monitoring
 
 - `GET /health` for liveness. `GET /v1/sys/status` tells you if it is sealed (a sealed server after

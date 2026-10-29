@@ -77,7 +77,7 @@ services:
       rekey-web:
         condition: service_healthy
     ports:
-      - "${REKEY_PORT:-11000}:8080"
+      - "${REKEY_BIND:-0.0.0.0}:${REKEY_PORT:-11000}:8080"
     volumes:
       - ./deploy/nginx/rekey.conf:/etc/nginx/conf.d/default.conf:ro
     read_only: true
