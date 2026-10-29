@@ -248,11 +248,13 @@ class Rotation(Base):
     # The secret that holds the role's password; written on every rotation.
     path: Mapped[str] = mapped_column(String(512), default="/")
     name: Mapped[str] = mapped_column(String(256))
-    kind: Mapped[str] = mapped_column(String(16), default="postgres")
+    kind: Mapped[str] = mapped_column(String(16), default="postgres")  # postgres | mysql
     host: Mapped[str] = mapped_column(String(253))
     port: Mapped[int] = mapped_column(Integer, default=5432)
     database: Mapped[str] = mapped_column(String(63), default="postgres")
     role: Mapped[str] = mapped_column(String(63))  # the role whose password is changed
+    # MySQL accounts are user@host; the host part applies to both roles in alternate mode.
+    user_host: Mapped[str] = mapped_column(String(255), default="%", server_default="%")
     # "single": one role, its password is replaced (clients must refetch at once).
     # "alternate": two roles with the same rights; each run changes the one that is NOT in use and
     # then points the secrets at it, so the role clients already use keeps working for a full

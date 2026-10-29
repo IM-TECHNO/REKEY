@@ -43,10 +43,14 @@ class FakeTarget:
         self.rolled_back = 0
         self.admin_passwords: list[str] = []
         self.roles: list[str] = []
+        self.previous: list[str | None] = []
 
-    async def begin(self, r: Rotation, admin_password: str, new: str, role: str) -> FakeSession:
+    async def begin(
+        self, r: Rotation, admin_password: str, new: str, role: str, previous: str | None = None
+    ) -> FakeSession:
         self.admin_passwords.append(admin_password)
         self.roles.append(role)
+        self.previous.append(previous)
         if self.fail_begin:
             raise RuntimeError(f"password authentication failed ({admin_password})")
         self.pending = new
@@ -194,10 +198,11 @@ async def test_a_sealed_server_refuses_to_run_and_the_scheduler_waits(rig) -> No
         await db.commit()
     await c.post("/v1/sys/seal", headers=AUTH)
     assert (await c.post(f"{BASE}/rotations/{pol['id']}/run", headers=AUTH)).status_code == 503
-    task = asyncio.create_task(rotation.run_forever(app, poll_seconds=0.05))
+    stop = asyncio.Event()
+    task = asyncio.create_task(rotation.run_forever(app, poll_seconds=0.05, stop=stop))
     await asyncio.sleep(0.3)
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
+    stop.set()
+    await task  # a clean stop: cancelling mid-query would drop the in-memory test database
     assert target.committed == []
 
 
@@ -210,10 +215,15 @@ async def test_the_scheduler_rotates_due_policies_only(rig) -> None:  # type: ig
         row = await db.get(Rotation, due["id"])
         row.next_due = datetime.now(UTC) - timedelta(minutes=1)
         await db.commit()
-    task = asyncio.create_task(rotation.run_forever(app, poll_seconds=0.05))
-    await asyncio.sleep(0.5)
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
+    stop = asyncio.Event()
+    task = asyncio.create_task(rotation.run_forever(app, poll_seconds=0.05, stop=stop))
+    for _ in range(100):  # wait for the run instead of guessing how long it takes
+        if target.committed:
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.4)  # long enough for a wrongly repeated run to show up
+    stop.set()
+    await task
     assert len(target.committed) == 1  # once: next_due moved a month ahead
     assert (await c.get(f"{BASE}/secrets/OTHER_PASSWORD", headers=AUTH)).status_code == 404
 
@@ -267,20 +277,20 @@ async def test_the_real_connector_changes_a_role_password_and_can_roll_back() ->
         connector = rotation.PgConnector()
         # Not committed yet: the old password still works (the change is invisible to others).
         session = await connector.begin(
-            r, str(admin["password"]), "new-password-1", "rekey_rot_test"
+            r, str(admin["password"]), "new-password-1", "rekey_rot_test", None
         )
         assert await can_login("old-password")
         await session.rollback()
         assert await can_login("old-password") and not await can_login("new-password-1")
         # Committed: the new one works, the old one does not.
         session = await connector.begin(
-            r, str(admin["password"]), "new-password-2", "rekey_rot_test"
+            r, str(admin["password"]), "new-password-2", "rekey_rot_test", None
         )
         await session.commit()
         assert await can_login("new-password-2") and not await can_login("old-password")
         # Quotes in a password (not produced by Rekey, but the server must quote it safely).
         session = await connector.begin(
-            r, str(admin["password"]), 'it\'s "quoted"', "rekey_rot_test"
+            r, str(admin["password"]), 'it\'s "quoted"', "rekey_rot_test", None
         )
         await session.commit()
         assert await can_login('it\'s "quoted"')

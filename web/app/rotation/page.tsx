@@ -48,7 +48,7 @@ export default function RotationPage() {
       <div className="max-w-6xl p-8">
         <PageTitle
           title="Rotation"
-          sub="Change a Postgres role's password on a schedule and store the new one as a new secret version. Apps must fetch the secret again after a rotation."
+          sub="Change a database account's password (Postgres or MySQL) on a schedule and store the new one as a new secret version. Apps must fetch the secret again after a rotation."
         />
         <div className="mt-4 flex items-center gap-3">
           <select
@@ -76,7 +76,7 @@ export default function RotationPage() {
             <thead>
               <tr className="border-b border-border">
                 <th className={th}>Secret</th>
-                <th className={th}>Role @ server</th>
+                <th className={th}>Account @ server</th>
                 <th className={th}>Every</th>
                 <th className={th}>Next</th>
                 <th className={th}>Last run</th>
@@ -90,7 +90,10 @@ export default function RotationPage() {
                     {r.path === "/" ? "" : r.path}/{r.name}
                   </td>
                   <td className={td + " font-mono text-muted"}>
-                    {r.mode === "alternate" ? `${r.role} ⇄ ${r.role_b}` : r.role} @ {r.host}:{r.port}/{r.database}
+                    <Pill tone="ok">{r.kind}</Pill>{" "}
+                    {r.mode === "alternate" ? `${r.role} ⇄ ${r.role_b}` : r.role}
+                    {r.kind === "mysql" ? `@'${r.user_host}'` : ""} @ {r.host}:{r.port}
+                    {r.database ? `/${r.database}` : ""}
                     {r.mode === "alternate" && (
                       <div className="mt-1 text-xs">
                         zero downtime · in use: <span className="text-foreground">{r.active_role}</span> · username in {r.username_secret_name}
@@ -170,6 +173,7 @@ function RotationModal({ base, onClose, onDone }: { base: string; onClose: () =>
     host: "",
     port: "5432",
     database: "postgres",
+    user_host: "%",
     role: "",
     ssl: "require",
     admin_user: "",
@@ -179,6 +183,12 @@ function RotationModal({ base, onClose, onDone }: { base: string; onClose: () =>
     username_secret_name: "",
   });
   const [alternate, setAlternate] = useState(false);
+  const [kind, setKind] = useState<"postgres" | "mysql">("postgres");
+  const mysql = kind === "mysql";
+  function pickKind(k: "postgres" | "mysql") {
+    setKind(k);
+    setF((x) => ({ ...x, port: k === "mysql" ? "3306" : "5432", database: k === "mysql" ? "" : "postgres" }));
+  }
   const [err, setErr] = useState<string | null>(null);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setF((x) => ({ ...x, [k]: e.target.value }));
@@ -187,6 +197,9 @@ function RotationModal({ base, onClose, onDone }: { base: string; onClose: () =>
     /^[A-Za-z0-9._:-]{1,253}$/.test(f.host) &&
     /^[A-Za-z0-9_.$-]{1,63}$/.test(f.role) &&
     /^[A-Za-z0-9_.$-]{1,63}$/.test(f.admin_user) &&
+    (f.database === "" || /^[A-Za-z0-9_.$-]{1,63}$/.test(f.database)) &&
+    (!mysql || /^[A-Za-z0-9._%:/-]{1,255}$/.test(f.user_host)) &&
+    (!mysql || (f.role.length <= 32 && f.admin_user.length <= 32 && f.role_b.length <= 32)) &&
     /^[A-Za-z0-9_.-]{1,256}$/.test(f.admin_secret_name) &&
     Number(f.port) >= 1 &&
     Number(f.interval_hours) >= 1 &&
@@ -198,9 +211,12 @@ function RotationModal({ base, onClose, onDone }: { base: string; onClose: () =>
 
   async function create() {
     try {
-      const { role_b, username_secret_name, ...rest } = f;
+      const { role_b, username_secret_name, user_host, database, ...rest } = f;
       await api("POST", base, {
         ...rest,
+        kind,
+        ...(database ? { database } : {}),
+        ...(mysql ? { user_host } : {}),
         port: Number(f.port),
         interval_hours: Number(f.interval_hours),
         ...(alternate ? { mode: "alternate", role_b, username_secret_name } : {}),
@@ -217,9 +233,15 @@ function RotationModal({ base, onClose, onDone }: { base: string; onClose: () =>
         <Field label="Secret to write" hint="Holds the role's password, e.g. DB_PASSWORD. Created on the first rotation.">
           <input value={f.name} onChange={set("name")} className={inputCls + " font-mono"} autoFocus />
         </Field>
+        <Field label="Database">
+          <select value={kind} onChange={(e) => pickKind(e.target.value as "postgres" | "mysql")} className={inputCls}>
+            <option value="postgres">PostgreSQL</option>
+            <option value="mysql">MySQL</option>
+          </select>
+        </Field>
         <div className="grid grid-cols-3 gap-3">
           <div className="col-span-2">
-            <Field label="Postgres host">
+            <Field label="Server host">
               <input value={f.host} onChange={set("host")} className={inputCls + " font-mono"} />
             </Field>
           </div>
@@ -228,7 +250,7 @@ function RotationModal({ base, onClose, onDone }: { base: string; onClose: () =>
           </Field>
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Database">
+          <Field label={mysql ? "Schema (optional)" : "Database"}>
             <input value={f.database} onChange={set("database")} className={inputCls + " font-mono"} />
           </Field>
           <Field label="TLS">
@@ -239,9 +261,16 @@ function RotationModal({ base, onClose, onDone }: { base: string; onClose: () =>
             </select>
           </Field>
         </div>
-        <Field label="Role to rotate" hint="Its password is replaced on every run.">
-          <input value={f.role} onChange={set("role")} className={inputCls + " font-mono"} />
-        </Field>
+        <div className={mysql ? "grid grid-cols-2 gap-3" : ""}>
+          <Field label={mysql ? "User to rotate" : "Role to rotate"} hint="Its password is replaced on every run.">
+            <input value={f.role} onChange={set("role")} className={inputCls + " font-mono"} />
+          </Field>
+          {mysql && (
+            <Field label="Account host" hint="The part after @, e.g. % or 10.0.%">
+              <input value={f.user_host} onChange={set("user_host")} className={inputCls + " font-mono"} />
+            </Field>
+          )}
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Admin user" hint="Allowed to ALTER that role.">
             <input value={f.admin_user} onChange={set("admin_user")} className={inputCls + " font-mono"} />

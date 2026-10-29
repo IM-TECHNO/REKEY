@@ -38,6 +38,8 @@ export type IdentityInfo = {
 
 export type RotationInfo = {
   id: string;
+  kind: "postgres" | "mysql";
+  user_host: string;
   name: string;
   path: string;
   host: string;

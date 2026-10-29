@@ -16,7 +16,7 @@ from rekey.db import make_engine, make_sessionmaker
 from rekey.insights import router as insights_router
 from rekey.oidc import Provider
 from rekey.ratelimit import RateLimiter
-from rekey.rotation import PgConnector
+from rekey.rotation import RoutingConnector
 from rekey.rotation import router as rotation_router
 
 
@@ -51,7 +51,7 @@ def create_app(
     app.state.keyring = None
     app.state.oidc = Provider(settings, http)
     app.state.limiter = RateLimiter()
-    app.state.rotation_connector = PgConnector()
+    app.state.rotation_connector = RoutingConnector()
     app.state.rotation_locks = {}
     app.include_router(router)
     app.include_router(auth_router)

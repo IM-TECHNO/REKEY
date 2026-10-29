@@ -67,18 +67,28 @@ apply directly; those changes are audited. Keep the superadmin list short.
   request in flight during the switch may fail once and can be retried. Distribute the new shares
   before closing the dialog; they are not shown again.
 - **Secret values** (the actual passwords and API keys) are rotated by you at their source and then
-  updated in Rekey, except Postgres role passwords, which Rekey can rotate itself (next section).
+  updated in Rekey, except database account passwords, which Rekey can rotate itself (next section).
 
-## Rotating Postgres passwords automatically
+## Rotating database passwords automatically (Postgres and MySQL)
 
 Rotation page (superadmin): a policy says "every N hours, change the password of role R on Postgres
 server H and store it as a new version of secret S". Rekey connects as an admin user whose password
 is read from **another secret in the same environment** (nothing is stored on the policy). Only
 superadmins can create policies, because Rekey will connect to the host they type.
 
-Each run: open a transaction on the target and `ALTER ROLE`; write the new 32-character password to
-Rekey; then commit the target. If the target commit fails, the previous value is written back; if
-the Rekey write fails, the target is rolled back. A failure is shown on the page (passwords are
+Each run on **Postgres**: open a transaction on the target and `ALTER ROLE`; write the new
+32-character password to Rekey; then commit the target. If the target commit fails, the previous
+value is written back; if the Rekey write fails, the target is rolled back.
+
+On **MySQL** (tested on MySQL 8; MariaDB 10.2+ uses the same statement but is untested; choose "Database" in the dialog; the account is `user@host`, with the host part
+defaulting to `%`) `ALTER USER` cannot be rolled back: it takes effect at once. So Rekey changes the
+account first, then writes the secret; if writing the secret fails it sets the old password back
+(single mode) or leaves the unused account alone (two-role mode, where nothing depends on it). If even
+that fails, the run's error says which password to set by hand. MySQL user names are limited to 32
+characters. TLS `require` encrypts without checking the certificate and `verify-full` checks it;
+over TLS on Windows the Python driver fails, so run Rekey on Linux (the container images do).
+
+A failure is shown on the page (passwords are
 masked in messages), audited as `rotation.fail`, and retried after 15 minutes; a success is audited
 as `rotation.run` by `rekey-rotator`. The scheduler only runs while the server is unsealed, and a
 manual "Rotate now" is always available. Protected environments do not ask for approval: the policy
@@ -102,7 +112,8 @@ Things to plan for:
 - In the default **single** mode the old password stops working at once, so applications must fetch
   the secret again (for example by restarting under `rekey run`).
 - Give Rekey an admin user that may only `ALTER` the roles it rotates (a role with `CREATEROLE`,
-  not a superuser, where your Postgres version allows it).
+  not a superuser, where your Postgres version allows it). On MySQL the admin user needs the
+  `CREATE USER` privilege (it is what `ALTER USER` requires), not `root`.
 - Use `require` or `verify-full` TLS. `disable` is for local testing.
 - If the role being rotated is the admin user itself, point the admin secret at the same secret
   (single mode only).
@@ -181,7 +192,7 @@ restart, unseal) after any use. Everything done with it is audited as `bootstrap
 
 - No automatic unseal; each restart needs the shares.
 - One API process; no high availability.
-- Secret rotation covers Postgres role passwords only; no dynamic secrets, PKI or SSH certificates.
+- Secret rotation covers Postgres and MySQL account passwords only; no dynamic secrets, PKI or SSH certificates.
 - The unsealed key lives in Python process memory, which cannot be reliably wiped. The container
   disables core dumps and runs read-only without capabilities; keep the host patched and access limited.
 

@@ -5,6 +5,7 @@ description = "Rekey: open-source secrets management server"
 license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
+    "aiomysql>=0.3.2",
     "aiosqlite>=0.22.1",
     "alembic>=1.20.1",
     "asyncpg>=0.32.0",

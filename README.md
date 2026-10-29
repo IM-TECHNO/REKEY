@@ -20,7 +20,8 @@ feature gates. Self-hosted, Apache-2.0.
 - **Approvals**: on protected environments, changes by anyone but a superadmin wait for a second
   person to approve them.
 - **Rotation**: rotate an environment's key (re-encrypting everything) or the root key (new shares).
-- **Secret rotation**: change a Postgres role's password on a schedule and store it as a new secret version.
+- **Secret rotation**: change a Postgres or MySQL account's password on a schedule and store it as a new
+  secret version, optionally with two alternating accounts so nothing breaks.
 - **Audit**: every allowed and denied action, in a hash chain you can verify. Values are never logged.
 - **Insights**: reads per day, top readers, secret age, anomalies (new IP, denial bursts, failed logins).
 - **CLI**: `rekey run -p app -e dev -- npm start` injects secrets into a command's environment.

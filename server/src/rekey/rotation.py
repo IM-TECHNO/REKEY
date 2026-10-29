@@ -1,28 +1,35 @@
-"""Automatic rotation of a Postgres role's password.
+"""Automatic rotation of a database account's password (Postgres or MySQL).
 
-A policy says: every N hours, change the password of `role` on a Postgres server and store the new
+A policy says: every N hours, change the password of `role` on a database server and store the new
 password as a new version of a secret. Rekey connects with an admin user whose own password is read
 from another secret in the same environment (so no credential lives on the policy).
 
-The order matters, because a mistake can lock an application out:
+The order matters, because a mistake can lock an application out. Postgres can change a password
+inside a transaction, so:
 
 1. Open a transaction on the target and run ALTER ROLE (nothing is visible to others yet).
 2. Write the new password to Rekey (committed).
 3. Commit the target. If that fails, Rekey puts the previous value back as a newer version.
 
-So there is no moment where the password in Rekey and the one on the server are both committed and
-different, other than the instant between steps 2 and 3. Applications that cached the old password
-stop working at step 3: have them fetch the secret again (for example `rekey run` on restart).
+MySQL cannot undo ALTER USER (it commits at once), so the target is changed first and, if writing
+the secret then fails, Rekey sets the old password back (single mode, where it is known; in
+alternate mode the changed role is not in use, so nothing depends on it). Either way the secret and
+the server agree again, or the failure says which one to fix by hand.
+Applications that cached the old password stop working at the change: have them fetch the secret
+again (for example `rekey run` on restart), or use the two-role mode, which has no downtime.
 Only superadmins create policies, because the host is chosen by them and Rekey connects to it.
 """
 
 import asyncio
+import contextlib
 import logging
 import secrets
+import ssl
 import string
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
 
+import aiomysql  # type: ignore[import-untyped]
 import asyncpg  # type: ignore[import-untyped]
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -41,6 +48,8 @@ _ALPHABET = string.ascii_letters + string.digits
 _RETRY_AFTER = timedelta(minutes=15)  # after a failure, try again sooner than the full interval
 _IDENT = r"^[A-Za-z0-9_.$-]{1,63}$"
 _HOST = r"^[A-Za-z0-9._:-]{1,253}$"
+_MYSQL_HOST = r"^[A-Za-z0-9._%:/-]{1,255}$"  # the host part of a MySQL account
+_MYSQL_USER_MAX = 32
 
 
 def new_password() -> str:
@@ -54,8 +63,14 @@ class TargetSession(Protocol):
 
 
 class Connector(Protocol):
-    async def begin(self, r: Rotation, admin_password: str, new: str, role: str) -> TargetSession:
-        """Change `role`'s password inside an open transaction and return it uncommitted."""
+    async def begin(
+        self, r: Rotation, admin_password: str, new: str, role: str, previous: str | None
+    ) -> TargetSession:
+        """Change `role`'s password and return a session that can commit or undo the change.
+
+        `previous` is the password to put back on rollback when the database cannot roll back by
+        itself (MySQL); None when it is not known or nobody relies on it.
+        """
         ...
 
 
@@ -78,7 +93,9 @@ class _PgSession:
 
 
 class PgConnector:
-    async def begin(self, r: Rotation, admin_password: str, new: str, role: str) -> TargetSession:
+    async def begin(
+        self, r: Rotation, admin_password: str, new: str, role: str, previous: str | None
+    ) -> TargetSession:
         conn = await asyncpg.connect(
             host=r.host,
             port=r.port,
@@ -102,6 +119,82 @@ class PgConnector:
         return _PgSession(conn, tx)
 
 
+def _ssl_context(mode: str) -> ssl.SSLContext | None:
+    if mode == "disable":
+        return None
+    ctx = ssl.create_default_context()
+    if mode == "require":  # encrypt, but do not verify the certificate (as libpq's `require`)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+async def _mysql_alter(conn: Any, role: str, host: str, password: str) -> None:
+    # aiomysql quotes the arguments as string literals; nothing is spliced into the SQL by us.
+    async with conn.cursor() as cur:
+        await cur.execute("ALTER USER %s@%s IDENTIFIED BY %s", (role, host, password))
+
+
+class _MySqlSession:
+    """The change is already applied (MySQL commits DDL at once); rollback sets the old one back."""
+
+    def __init__(self, conn: Any, r: Rotation, role: str, previous: str | None) -> None:
+        self._conn = conn
+        self._host = r.user_host
+        self._role = role
+        self._previous = previous
+
+    async def commit(self) -> None:
+        await self._conn.ensure_closed()
+
+    async def rollback(self) -> None:
+        try:
+            if self._previous is not None:
+                try:
+                    await _mysql_alter(self._conn, self._role, self._host, self._previous)
+                except Exception:  # noqa: BLE001
+                    raise RuntimeError(
+                        f"could not put the previous password of {self._role} back; "
+                        "set it by hand to match the secret"
+                    ) from None
+        finally:
+            await self._conn.ensure_closed()
+
+
+class MySqlConnector:
+    async def begin(
+        self, r: Rotation, admin_password: str, new: str, role: str, previous: str | None
+    ) -> TargetSession:
+        conn = await aiomysql.connect(
+            host=r.host,
+            port=r.port,
+            user=r.admin_user,
+            password=admin_password,
+            db=r.database or None,
+            ssl=_ssl_context(r.ssl),
+            connect_timeout=10,
+            autocommit=True,
+        )
+        try:
+            await _mysql_alter(conn, role, r.user_host, new)
+        except BaseException:
+            await conn.ensure_closed()
+            raise
+        return _MySqlSession(conn, r, role, previous)
+
+
+class RoutingConnector:
+    """Picks the connector for a policy's database kind."""
+
+    def __init__(self) -> None:
+        self._by_kind: dict[str, Connector] = {"postgres": PgConnector(), "mysql": MySqlConnector()}
+
+    async def begin(
+        self, r: Rotation, admin_password: str, new: str, role: str, previous: str | None
+    ) -> TargetSession:
+        return await self._by_kind[r.kind].begin(r, admin_password, new, role, previous)
+
+
 def _clean(message: str, *hide: str) -> str:
     for h in hide:
         if h:
@@ -110,11 +203,16 @@ def _clean(message: str, *hide: str) -> str:
 
 
 async def _begin_target(
-    connector: Connector, r: Rotation, admin_password: str, new: str, role: str
+    connector: Connector,
+    r: Rotation,
+    admin_password: str,
+    new: str,
+    role: str,
+    previous: str | None,
 ) -> TargetSession:
     """Open the change on the target; turn failures into messages that cannot hold the password."""
     try:
-        return await connector.begin(r, admin_password, new, role)
+        return await connector.begin(r, admin_password, new, role, previous)
     except Exception as exc:  # noqa: BLE001
         detail = _clean(str(exc), admin_password, new)
         raise RuntimeError(
@@ -215,7 +313,16 @@ async def run_one(
                     previous[n] = (old, meta.kind)
                 except service.NotFound:
                     previous[n] = None
-            session = await _begin_target(connector, r, admin_password, new, role)
+            # Only single mode relies on the old password, so only then is it worth putting back.
+            old_pw = previous[r.name]
+            session = await _begin_target(
+                connector,
+                r,
+                admin_password,
+                new,
+                role,
+                old_pw[0].decode() if old_pw is not None and not alternate else None,
+            )
             writes = [
                 service.SecretWrite(r.path, r.name, new.encode(), _kind(previous[r.name])),
             ]
@@ -268,10 +375,13 @@ async def run_one(
     return result
 
 
-async def run_forever(app: Any, *, poll_seconds: float = 30.0) -> None:
+async def run_forever(
+    app: Any, *, poll_seconds: float = 30.0, stop: asyncio.Event | None = None
+) -> None:
     """Rotate due policies. Only while unsealed; a sealed server simply waits."""
     locks: dict[str, asyncio.Lock] = app.state.rotation_locks
-    while True:
+    stop = stop or asyncio.Event()
+    while not stop.is_set():
         try:
             ring: Keyring | None = app.state.keyring
             if ring is not None and not ring.sealed:
@@ -300,7 +410,8 @@ async def run_forever(app: Any, *, poll_seconds: float = 30.0) -> None:
             raise
         except Exception:  # noqa: BLE001 - one bad round must not stop the schedule
             logger.exception("rotation round failed")
-        await asyncio.sleep(poll_seconds)
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stop.wait(), poll_seconds)
 
 
 # ---- API (superadmin only) ----------------------------------------------------------------
@@ -311,9 +422,11 @@ router = APIRouter(prefix="/v1/projects/{project}/envs/{env}/rotations")
 class RotationCreate(BaseModel):
     name: str = Field(description="The secret that will hold the password")
     path: str = "/"
+    kind: Literal["postgres", "mysql"] = "postgres"
     host: str = Field(pattern=_HOST)
-    port: int = Field(5432, ge=1, le=65535)
-    database: str = Field("postgres", pattern=_IDENT)
+    port: int | None = Field(None, ge=1, le=65535, description="default 5432 / 3306")
+    database: str | None = Field(None, pattern=_IDENT, description="default postgres / none")
+    user_host: str = Field("%", pattern=_MYSQL_HOST, description="MySQL only: the account's host")
     role: str = Field(pattern=_IDENT, description="The role whose password is rotated")
     mode: Literal["single", "alternate"] = "single"
     role_b: str | None = Field(None, pattern=_IDENT, description="alternate: the second role")
@@ -337,6 +450,7 @@ def _out(r: Rotation) -> dict[str, Any]:
     return {
         "id": r.id,
         "kind": r.kind,
+        "user_host": r.user_host,
         "name": r.name,
         "path": r.path,
         "host": r.host,
@@ -395,6 +509,13 @@ async def create_rotation(
 ) -> dict[str, Any]:
     path, name = clean_path(body.path), clean_name(body.name)
     admin_path, admin_name = clean_path(body.admin_secret_path), clean_name(body.admin_secret_name)
+    mysql = body.kind == "mysql"
+    if mysql and any(
+        len(x) > _MYSQL_USER_MAX for x in (body.role, body.role_b or "", body.admin_user)
+    ):
+        raise HTTPException(422, f"MySQL user names are at most {_MYSQL_USER_MAX} characters")
+    if not mysql and body.user_host != "%":
+        raise HTTPException(422, "user_host is only for MySQL")
     user_name: str | None = None
     if body.mode == "alternate":
         if not body.role_b or not body.username_secret_name:
@@ -417,9 +538,11 @@ async def create_rotation(
         environment_id=env.id,
         path=path,
         name=name,
+        kind=body.kind,
         host=body.host,
-        port=body.port,
-        database=body.database,
+        port=body.port or (3306 if mysql else 5432),
+        database=body.database if body.database is not None else ("" if mysql else "postgres"),
+        user_host=body.user_host,
         role=body.role,
         mode=body.mode,
         role_b=body.role_b,
