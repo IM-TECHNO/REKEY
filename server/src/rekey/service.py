@@ -1,5 +1,6 @@
 """Secret storage logic: ties the database rows to the crypto keyring."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -475,6 +476,61 @@ async def _latest_version(db: AsyncSession, secret_id: str) -> int:
     ).scalar_one() or 0
 
 
+@dataclass(frozen=True)
+class SecretWrite:
+    path: str
+    name: str
+    value: bytes
+    kind: str
+
+
+async def put_secrets(
+    db: AsyncSession,
+    ring: Keyring,
+    env: Environment,
+    writes: Sequence[SecretWrite],
+    *,
+    actor: str,
+) -> list[int]:
+    """Write a new version of several secrets in one transaction: all appear, or none do."""
+    await lock_keys(db, exclusive=False)  # before choosing a key: see lock_keys
+    key = await _current_key(db, env.id)
+    versions: list[int] = []
+    try:
+        for w in writes:
+            secret = await _find(db, env.id, w.path, w.name)
+            if secret is None:
+                secret = Secret(environment_id=env.id, path=w.path, name=w.name, kind=w.kind)
+                db.add(secret)
+                await db.flush()
+            else:
+                secret.kind = w.kind
+            version = await _latest_version(db, secret.id) + 1
+            db.add(
+                SecretVersion(
+                    secret_id=secret.id,
+                    version=version,
+                    ciphertext=ring.encrypt_value(
+                        key.wrapped_key,
+                        env_id=env.id,
+                        env_key_version=key.version,
+                        path=w.path,
+                        name=w.name,
+                        version=version,
+                        value=w.value,
+                    ),
+                    env_key_version=key.version,
+                    created_by=actor,
+                )
+            )
+            versions.append(version)
+        await db.commit()
+    except BaseException:
+        await db.rollback()
+        raise
+    return versions
+
+
 async def put_secret(
     db: AsyncSession,
     ring: Keyring,
@@ -487,35 +543,9 @@ async def put_secret(
     actor: str,
 ) -> int:
     """Write a new version of a secret and return its version number."""
-    await lock_keys(db, exclusive=False)  # before choosing a key: see lock_keys
-    key = await _current_key(db, env.id)
-    secret = await _find(db, env.id, path, name)
-    if secret is None:
-        secret = Secret(environment_id=env.id, path=path, name=name, kind=kind)
-        db.add(secret)
-        await db.flush()
-    else:
-        secret.kind = kind
-    version = await _latest_version(db, secret.id) + 1
-    db.add(
-        SecretVersion(
-            secret_id=secret.id,
-            version=version,
-            ciphertext=ring.encrypt_value(
-                key.wrapped_key,
-                env_id=env.id,
-                env_key_version=key.version,
-                path=path,
-                name=name,
-                version=version,
-                value=value,
-            ),
-            env_key_version=key.version,
-            created_by=actor,
-        )
-    )
-    await db.commit()
-    return version
+    return (await put_secrets(db, ring, env, [SecretWrite(path, name, value, kind)], actor=actor))[
+        0
+    ]
 
 
 async def get_secret(

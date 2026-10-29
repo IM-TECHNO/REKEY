@@ -54,8 +54,8 @@ class TargetSession(Protocol):
 
 
 class Connector(Protocol):
-    async def begin(self, r: Rotation, admin_password: str, new: str) -> TargetSession:
-        """Change the role's password inside an open transaction and return it uncommitted."""
+    async def begin(self, r: Rotation, admin_password: str, new: str, role: str) -> TargetSession:
+        """Change `role`'s password inside an open transaction and return it uncommitted."""
         ...
 
 
@@ -78,7 +78,7 @@ class _PgSession:
 
 
 class PgConnector:
-    async def begin(self, r: Rotation, admin_password: str, new: str) -> TargetSession:
+    async def begin(self, r: Rotation, admin_password: str, new: str, role: str) -> TargetSession:
         conn = await asyncpg.connect(
             host=r.host,
             port=r.port,
@@ -93,7 +93,7 @@ class PgConnector:
             await tx.start()
             # The server quotes the identifier and the literal; nothing is spliced in by us.
             stmt = await conn.fetchval(
-                "SELECT format('ALTER ROLE %I WITH PASSWORD %L', $1::text, $2::text)", r.role, new
+                "SELECT format('ALTER ROLE %I WITH PASSWORD %L', $1::text, $2::text)", role, new
             )
             await conn.execute(stmt)
         except BaseException:
@@ -110,15 +110,16 @@ def _clean(message: str, *hide: str) -> str:
 
 
 async def _begin_target(
-    connector: Connector, r: Rotation, admin_password: str, new: str
+    connector: Connector, r: Rotation, admin_password: str, new: str, role: str
 ) -> TargetSession:
     """Open the change on the target; turn failures into messages that cannot hold the password."""
     try:
-        return await connector.begin(r, admin_password, new)
+        return await connector.begin(r, admin_password, new, role)
     except Exception as exc:  # noqa: BLE001
         detail = _clean(str(exc), admin_password, new)
         raise RuntimeError(
-            f"could not change the password on {r.host}:{r.port} ({exc.__class__.__name__}"
+            f"could not change the password of {role} on {r.host}:{r.port} "
+            f"({exc.__class__.__name__}"
             f"{': ' + detail if detail else ''})"
         ) from None
 
@@ -134,6 +135,7 @@ async def _record(
     rotation_id: str,
     result: RotationResult,
     interval_hours: int,
+    new_slot: str | None = None,
 ) -> None:
     now = datetime.now(UTC)
     async with sessionmaker() as db:
@@ -145,8 +147,30 @@ async def _record(
         row.last_error = result.error
         if result.ok:
             row.last_version = result.version
+            if new_slot:
+                row.active_slot = new_slot
         row.next_due = now + (timedelta(hours=interval_hours) if result.ok else _RETRY_AFTER)
         await db.commit()
+
+
+def _kind(prev: tuple[bytes, str] | None) -> str:
+    return prev[1] if prev else "plain"
+
+
+async def _restore(
+    db: AsyncSession,
+    ring: Keyring,
+    env: Environment,
+    path: str,
+    previous: dict[str, tuple[bytes, str] | None],
+) -> None:
+    """Put the secrets back as they were: old values as new versions, brand-new ones removed."""
+    old = [service.SecretWrite(path, n, p[0], p[1]) for n, p in previous.items() if p is not None]
+    if old:
+        await service.put_secrets(db, ring, env, old, actor=ACTOR)
+    for n, p in previous.items():
+        if p is None:
+            await service.delete_secret(db, env, path=path, name=n)
 
 
 async def run_one(
@@ -165,6 +189,11 @@ async def run_one(
         if env is None or project is None:
             return RotationResult(ok=False, error="environment not found")
     slug, env_slug, interval = project.slug, env.slug, r.interval_hours
+    alternate = r.mode == "alternate" and bool(r.role_b) and bool(r.username_secret_name)
+    # Alternate mode changes the role clients are NOT using, then points the secrets at it.
+    standby = ("b" if r.active_slot == "a" else "a") if alternate else None
+    role = (r.role_b or r.role) if standby == "b" else r.role
+    names = [r.name] + ([r.username_secret_name] if alternate and r.username_secret_name else [])
     target = f"{r.path.rstrip('/')}/{r.name}"
     new = new_password()
     admin_password = ""
@@ -179,24 +208,28 @@ async def run_one(
             except service.NotFound:
                 raise RuntimeError("the admin password secret does not exist") from None
             admin_password = raw.decode()
-            previous: tuple[bytes, str] | None
-            try:
-                old, meta = await service.get_secret(db, ring, env, path=r.path, name=r.name)
-                previous = (old, meta.kind)
-            except service.NotFound:
-                previous = None
-            session = await _begin_target(connector, r, admin_password, new)
-            try:
-                version = await service.put_secret(
-                    db,
-                    ring,
-                    env,
-                    path=r.path,
-                    name=r.name,
-                    value=new.encode(),
-                    kind=previous[1] if previous else "plain",
-                    actor=ACTOR,
+            previous: dict[str, tuple[bytes, str] | None] = {}
+            for n in names:
+                try:
+                    old, meta = await service.get_secret(db, ring, env, path=r.path, name=n)
+                    previous[n] = (old, meta.kind)
+                except service.NotFound:
+                    previous[n] = None
+            session = await _begin_target(connector, r, admin_password, new, role)
+            writes = [
+                service.SecretWrite(r.path, r.name, new.encode(), _kind(previous[r.name])),
+            ]
+            if alternate and r.username_secret_name:
+                writes.append(
+                    service.SecretWrite(
+                        r.path,
+                        r.username_secret_name,
+                        role.encode(),
+                        _kind(previous[r.username_secret_name]),
+                    )
                 )
+            try:
+                version = (await service.put_secrets(db, ring, env, writes, actor=ACTOR))[0]
             except Exception:
                 await session.rollback()
                 session = None
@@ -206,19 +239,11 @@ async def run_one(
                 session = None
             except Exception as exc:
                 session = None
-                restored = "previous value not restored"
-                if previous is not None:
-                    await service.put_secret(
-                        db,
-                        ring,
-                        env,
-                        path=r.path,
-                        name=r.name,
-                        value=previous[0],
-                        kind=previous[1],
-                        actor=ACTOR,
-                    )
+                try:
+                    await _restore(db, ring, env, r.path, previous)
                     restored = "previous value restored"
+                except Exception:  # noqa: BLE001
+                    restored = "previous value NOT restored, fix the secret by hand"
                 raise RuntimeError(
                     f"the database refused the change ({exc.__class__.__name__}); {restored}"
                 ) from None
@@ -231,7 +256,7 @@ async def run_one(
                 logger.warning("rotation rollback failed")
         msg = str(exc) or exc.__class__.__name__
         result = RotationResult(ok=False, error=_clean(msg, new, admin_password))
-    await _record(sessionmaker, rotation_id, result, interval)
+    await _record(sessionmaker, rotation_id, result, interval, standby)
     await audit.record(
         sessionmaker,
         actor=ACTOR,
@@ -290,6 +315,11 @@ class RotationCreate(BaseModel):
     port: int = Field(5432, ge=1, le=65535)
     database: str = Field("postgres", pattern=_IDENT)
     role: str = Field(pattern=_IDENT, description="The role whose password is rotated")
+    mode: Literal["single", "alternate"] = "single"
+    role_b: str | None = Field(None, pattern=_IDENT, description="alternate: the second role")
+    username_secret_name: str | None = Field(
+        None, description="alternate: the secret that tells clients which role to use"
+    )
     ssl: Literal["disable", "require", "verify-full"] = "require"
     admin_user: str = Field(pattern=_IDENT)
     admin_secret_name: str
@@ -313,6 +343,12 @@ def _out(r: Rotation) -> dict[str, Any]:
         "port": r.port,
         "database": r.database,
         "role": r.role,
+        "mode": r.mode,
+        "role_b": r.role_b,
+        "username_secret_name": r.username_secret_name,
+        "active_role": (r.role_b if r.active_slot == "b" else r.role)
+        if r.mode == "alternate"
+        else r.role,
         "ssl": r.ssl,
         "admin_user": r.admin_user,
         "admin_secret_name": r.admin_secret_name,
@@ -359,6 +395,15 @@ async def create_rotation(
 ) -> dict[str, Any]:
     path, name = clean_path(body.path), clean_name(body.name)
     admin_path, admin_name = clean_path(body.admin_secret_path), clean_name(body.admin_secret_name)
+    user_name: str | None = None
+    if body.mode == "alternate":
+        if not body.role_b or not body.username_secret_name:
+            raise HTTPException(422, "alternate mode needs role_b and username_secret_name")
+        user_name = clean_name(body.username_secret_name)
+        if body.role_b == body.role or user_name == name:
+            raise HTTPException(422, "role_b and the username secret must differ from the first")
+    elif body.role_b or body.username_secret_name:
+        raise HTTPException(422, "role_b and username_secret_name are only for alternate mode")
     exists = (
         await db.execute(
             select(Rotation.id).where(
@@ -376,6 +421,9 @@ async def create_rotation(
         port=body.port,
         database=body.database,
         role=body.role,
+        mode=body.mode,
+        role_b=body.role_b,
+        username_secret_name=user_name,
         ssl=body.ssl,
         admin_user=body.admin_user,
         admin_secret_path=admin_path,

@@ -84,14 +84,28 @@ as `rotation.run` by `rekey-rotator`. The scheduler only runs while the server i
 manual "Rotate now" is always available. Protected environments do not ask for approval: the policy
 itself is the approval, and only a superadmin can create it.
 
+### Zero downtime: two roles
+
+Choose "Zero downtime (two roles)" and name a second role and a **username secret**. Create both
+roles yourself with the same rights, and make applications read the username and the password from
+Rekey. Each run then changes the password of the role the applications are *not* using, writes the
+new password and that role's name to the two secrets in one transaction, and flips which role is in
+use. The role applications were already using keeps its password for a whole interval, so a
+connection pool that is still running keeps working and picks up the new pair when it next reads the
+secrets. The first run switches from the first role to the second; the next switches back, and the
+role that was in use before is finally retired. Choose an interval longer than the time your
+applications need to re-read their secrets. If a run fails after the target was changed, both secrets
+are restored (or removed, if they did not exist yet) and the active role does not change.
+
 Things to plan for:
 
-- The old password stops working at once. Applications must fetch the secret again (for example by
-  restarting under `rekey run`). There is no overlap period or two-role handover yet.
+- In the default **single** mode the old password stops working at once, so applications must fetch
+  the secret again (for example by restarting under `rekey run`).
 - Give Rekey an admin user that may only `ALTER` the roles it rotates (a role with `CREATEROLE`,
   not a superuser, where your Postgres version allows it).
 - Use `require` or `verify-full` TLS. `disable` is for local testing.
-- If the role being rotated is the admin user itself, point the admin secret at the same secret.
+- If the role being rotated is the admin user itself, point the admin secret at the same secret
+  (single mode only).
 
 ## Backups and restore
 

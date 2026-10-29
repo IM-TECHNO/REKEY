@@ -44,6 +44,10 @@ export type RotationInfo = {
   port: number;
   database: string;
   role: string;
+  mode: "single" | "alternate";
+  role_b: string | null;
+  username_secret_name: string | null;
+  active_role: string;
   ssl: string;
   admin_user: string;
   admin_secret_name: string;

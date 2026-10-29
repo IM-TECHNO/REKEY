@@ -21,7 +21,7 @@ export function Modal({
       className="fixed inset-0 z-20 bg-black/60 grid place-items-center p-4"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div role="dialog" aria-label={title} className="w-full max-w-lg border border-border bg-surface">
+      <div role="dialog" aria-label={title} className="w-full max-w-lg max-h-[calc(100vh-2rem)] overflow-y-auto border border-border bg-surface">
         <div className="flex items-center justify-between border-b border-border px-5 py-3">
           <h2 className="text-sm font-semibold">{title}</h2>
           <button onClick={onClose} aria-label="Close" className="text-muted hover:text-foreground">

@@ -42,9 +42,11 @@ class FakeTarget:
         self.committed: list[str] = []
         self.rolled_back = 0
         self.admin_passwords: list[str] = []
+        self.roles: list[str] = []
 
-    async def begin(self, r: Rotation, admin_password: str, new: str) -> FakeSession:
+    async def begin(self, r: Rotation, admin_password: str, new: str, role: str) -> FakeSession:
         self.admin_passwords.append(admin_password)
+        self.roles.append(role)
         if self.fail_begin:
             raise RuntimeError(f"password authentication failed ({admin_password})")
         self.pending = new
@@ -120,7 +122,7 @@ async def test_failed_rekey_write_rolls_the_target_back(rig, monkeypatch) -> Non
     async def boom(*a: object, **k: object) -> int:
         raise RuntimeError("disk full")
 
-    monkeypatch.setattr(rotation.service, "put_secret", boom)
+    monkeypatch.setattr(rotation.service, "put_secrets", boom)
     r = await c.post(f"{BASE}/rotations/{pol['id']}/run", headers=AUTH)
     assert r.json()["ok"] is False and target.rolled_back == 1 and target.committed == []
 
@@ -264,16 +266,22 @@ async def test_the_real_connector_changes_a_role_password_and_can_roll_back() ->
         assert await can_login("old-password")
         connector = rotation.PgConnector()
         # Not committed yet: the old password still works (the change is invisible to others).
-        session = await connector.begin(r, str(admin["password"]), "new-password-1")
+        session = await connector.begin(
+            r, str(admin["password"]), "new-password-1", "rekey_rot_test"
+        )
         assert await can_login("old-password")
         await session.rollback()
         assert await can_login("old-password") and not await can_login("new-password-1")
         # Committed: the new one works, the old one does not.
-        session = await connector.begin(r, str(admin["password"]), "new-password-2")
+        session = await connector.begin(
+            r, str(admin["password"]), "new-password-2", "rekey_rot_test"
+        )
         await session.commit()
         assert await can_login("new-password-2") and not await can_login("old-password")
         # Quotes in a password (not produced by Rekey, but the server must quote it safely).
-        session = await connector.begin(r, str(admin["password"]), 'it\'s "quoted"')
+        session = await connector.begin(
+            r, str(admin["password"]), 'it\'s "quoted"', "rekey_rot_test"
+        )
         await session.commit()
         assert await can_login('it\'s "quoted"')
     finally:

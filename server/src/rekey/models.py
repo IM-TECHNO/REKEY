@@ -253,6 +253,14 @@ class Rotation(Base):
     port: Mapped[int] = mapped_column(Integer, default=5432)
     database: Mapped[str] = mapped_column(String(63), default="postgres")
     role: Mapped[str] = mapped_column(String(63))  # the role whose password is changed
+    # "single": one role, its password is replaced (clients must refetch at once).
+    # "alternate": two roles with the same rights; each run changes the one that is NOT in use and
+    # then points the secrets at it, so the role clients already use keeps working for a full
+    # interval (zero downtime). The username goes in its own secret.
+    mode: Mapped[str] = mapped_column(String(10), default="single", server_default="single")
+    role_b: Mapped[str | None] = mapped_column(String(63), default=None)
+    username_secret_name: Mapped[str | None] = mapped_column(String(256), default=None)
+    active_slot: Mapped[str] = mapped_column(String(1), default="a", server_default="a")  # a=role
     ssl: Mapped[str] = mapped_column(
         String(16), default="require"
     )  # disable | require | verify-full

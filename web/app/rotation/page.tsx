@@ -90,7 +90,12 @@ export default function RotationPage() {
                     {r.path === "/" ? "" : r.path}/{r.name}
                   </td>
                   <td className={td + " font-mono text-muted"}>
-                    {r.role} @ {r.host}:{r.port}/{r.database}
+                    {r.mode === "alternate" ? `${r.role} ⇄ ${r.role_b}` : r.role} @ {r.host}:{r.port}/{r.database}
+                    {r.mode === "alternate" && (
+                      <div className="mt-1 text-xs">
+                        zero downtime · in use: <span className="text-foreground">{r.active_role}</span> · username in {r.username_secret_name}
+                      </div>
+                    )}
                   </td>
                   <td className={td}>{r.interval_hours} h</td>
                   <td className={td + " text-muted"}>
@@ -170,7 +175,10 @@ function RotationModal({ base, onClose, onDone }: { base: string; onClose: () =>
     admin_user: "",
     admin_secret_name: "",
     interval_hours: "720",
+    role_b: "",
+    username_secret_name: "",
   });
+  const [alternate, setAlternate] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setF((x) => ({ ...x, [k]: e.target.value }));
@@ -181,14 +189,21 @@ function RotationModal({ base, onClose, onDone }: { base: string; onClose: () =>
     /^[A-Za-z0-9_.$-]{1,63}$/.test(f.admin_user) &&
     /^[A-Za-z0-9_.-]{1,256}$/.test(f.admin_secret_name) &&
     Number(f.port) >= 1 &&
-    Number(f.interval_hours) >= 1;
+    Number(f.interval_hours) >= 1 &&
+    (!alternate ||
+      (/^[A-Za-z0-9_.$-]{1,63}$/.test(f.role_b) &&
+        f.role_b !== f.role &&
+        /^[A-Za-z0-9_.-]{1,256}$/.test(f.username_secret_name) &&
+        f.username_secret_name !== f.name));
 
   async function create() {
     try {
+      const { role_b, username_secret_name, ...rest } = f;
       await api("POST", base, {
-        ...f,
+        ...rest,
         port: Number(f.port),
         interval_hours: Number(f.interval_hours),
+        ...(alternate ? { mode: "alternate", role_b, username_secret_name } : {}),
       });
       onDone();
     } catch (e) {
@@ -235,6 +250,26 @@ function RotationModal({ base, onClose, onDone }: { base: string; onClose: () =>
             <input value={f.admin_secret_name} onChange={set("admin_secret_name")} className={inputCls + " font-mono"} />
           </Field>
         </div>
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" checked={alternate} onChange={(e) => setAlternate(e.target.checked)} className="mt-1" />
+          <span>
+            Zero downtime (two roles)
+            <span className="block text-xs text-muted">
+              Each run changes the role apps are not using, then points the secrets at it. The role in use keeps
+              working for a full interval. Both roles must already exist with the same rights.
+            </span>
+          </span>
+        </label>
+        {alternate && (
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Second role">
+              <input value={f.role_b} onChange={set("role_b")} className={inputCls + " font-mono"} />
+            </Field>
+            <Field label="Username secret" hint="Apps read this to learn which role to use.">
+              <input value={f.username_secret_name} onChange={set("username_secret_name")} className={inputCls + " font-mono"} />
+            </Field>
+          </div>
+        )}
         <Field label="Every (hours)">
           <input value={f.interval_hours} onChange={set("interval_hours")} className={inputCls} inputMode="numeric" />
         </Field>

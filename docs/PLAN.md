@@ -17,7 +17,7 @@ Phase (open source). See [IP-RULES.md](IP-RULES.md): clean-room, nothing copied.
   approvals, unseal screen.
 - Rate limiting and trusted-proxy handling; key rotation (environment and root); approvals for
   protected environments.
-- Automatic rotation of Postgres role passwords (scheduled, two-phase so the secret and the server agree).
+- Automatic rotation of Postgres role passwords (scheduled, two-phase so the secret and the server agree), with an optional two-role mode that has no downtime.
 - Audit anchoring: the chain's head hash is copied to a file and/or webhook and checked on verify.
 - Docker images, compose with an nginx edge, Kubernetes manifests, operations runbook.
 
@@ -27,7 +27,7 @@ Phase (open source). See [IP-RULES.md](IP-RULES.md): clean-room, nothing copied.
 2. Independent review of `server/src/rekey/crypto` and the key handling (a self-review is done:
    [SECURITY-REVIEW-2026-10.md](SECURITY-REVIEW-2026-10.md)).
 3. Optional auto-unseal (a KMS or a second operator service), explicitly weighed against the model.
-4. More rotators (MySQL, API keys), a two-role handover with no downtime, dynamic secrets, then PKI and SSH certificates, possibly via
+4. More rotators (MySQL, API keys), dynamic secrets, then PKI and SSH certificates, possibly via
    OpenBao behind the `SecretStore` boundary.
 5. Secret scanning of repositories; Kubernetes operator / External Secrets provider.
 6. High availability (shared rate-limit store, multiple unsealed replicas).
