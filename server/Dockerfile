@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1
 FROM python:3.12-slim AS build
 ENV UV_LINK_MODE=copy UV_COMPILE_BYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
+# Slow or flaky links to PyPI should retry instead of failing the build.
+ENV PIP_DEFAULT_TIMEOUT=120 PIP_RETRIES=10 UV_HTTP_TIMEOUT=120 UV_HTTP_RETRIES=10
 RUN pip install uv==0.11.6
 WORKDIR /app
 # Dependencies first (cached until the lock file changes), exactly as locked.
