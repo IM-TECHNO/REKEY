@@ -12,6 +12,7 @@ const icons: Record<string, string> = {
   insights: "M4 20V10m6 10V4m6 16v-7m4 7H2",
   access: "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-8 9a8 8 0 0 1 16 0",
   projects: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z",
+  rotation: "M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5",
   security: "M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Z",
   audit: "M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01",
 };
@@ -23,6 +24,7 @@ const items: Item[] = [
   { href: "/approvals", label: "Approvals", icon: "approvals" },
   { href: "/insights", label: "Insights", icon: "insights", admin: true },
   { href: "/projects", label: "Projects", icon: "projects", admin: true },
+  { href: "/rotation", label: "Rotation", icon: "rotation", admin: true },
   { href: "/access", label: "Access control", icon: "access", admin: true },
   { href: "/audit", label: "Audit log", icon: "audit", admin: true },
   { href: "/security", label: "Security", icon: "security", admin: true },

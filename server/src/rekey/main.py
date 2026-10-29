@@ -6,7 +6,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from rekey import anchor, service
+from rekey import anchor, rotation, service
 from rekey.api import router
 from rekey.auth_api import router as auth_router
 from rekey.changes import router as changes_router
@@ -16,6 +16,8 @@ from rekey.db import make_engine, make_sessionmaker
 from rekey.insights import router as insights_router
 from rekey.oidc import Provider
 from rekey.ratelimit import RateLimiter
+from rekey.rotation import PgConnector
+from rekey.rotation import router as rotation_router
 
 
 def create_app(
@@ -28,11 +30,14 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
         task: asyncio.Task[None] | None = None
+        rot_task = asyncio.create_task(rotation.run_forever(app_))
         if anchor.enabled(settings):
             if settings.audit_anchor_webhook:
                 anchor.check_webhook_url(settings.audit_anchor_webhook)
             task = asyncio.create_task(anchor.run_forever(settings, app_.state.sessionmaker, http))
         yield
+        rot_task.cancel()
+        await asyncio.gather(rot_task, return_exceptions=True)
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
@@ -46,10 +51,13 @@ def create_app(
     app.state.keyring = None
     app.state.oidc = Provider(settings, http)
     app.state.limiter = RateLimiter()
+    app.state.rotation_connector = PgConnector()
+    app.state.rotation_locks = {}
     app.include_router(router)
     app.include_router(auth_router)
     app.include_router(insights_router)
     app.include_router(changes_router)
+    app.include_router(rotation_router)
 
     @app.middleware("http")
     async def no_store(request: Request, call_next):  # type: ignore[no-untyped-def]

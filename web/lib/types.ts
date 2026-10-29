@@ -36,6 +36,26 @@ export type IdentityInfo = {
   token_expires_at: string | null;
 };
 
+export type RotationInfo = {
+  id: string;
+  name: string;
+  path: string;
+  host: string;
+  port: number;
+  database: string;
+  role: string;
+  ssl: string;
+  admin_user: string;
+  admin_secret_name: string;
+  interval_hours: number;
+  enabled: boolean;
+  next_due: string;
+  last_run_at: string | null;
+  last_status: "" | "ok" | "error";
+  last_error: string;
+  last_version: number | null;
+};
+
 export type GrantInfo = {
   id: string;
   identity: string;

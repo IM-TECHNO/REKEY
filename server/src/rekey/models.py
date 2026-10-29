@@ -235,3 +235,38 @@ class SecretVersion(Base):
     env_key_version: Mapped[int] = mapped_column(Integer)
     created_by: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Rotation(Base):
+    """A schedule that rotates one secret by changing a password on a Postgres server."""
+
+    __tablename__ = "rotation"
+    __table_args__ = (UniqueConstraint("environment_id", "path", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_id)
+    environment_id: Mapped[str] = mapped_column(ForeignKey("environment.id", ondelete="CASCADE"))
+    # The secret that holds the role's password; written on every rotation.
+    path: Mapped[str] = mapped_column(String(512), default="/")
+    name: Mapped[str] = mapped_column(String(256))
+    kind: Mapped[str] = mapped_column(String(16), default="postgres")
+    host: Mapped[str] = mapped_column(String(253))
+    port: Mapped[int] = mapped_column(Integer, default=5432)
+    database: Mapped[str] = mapped_column(String(63), default="postgres")
+    role: Mapped[str] = mapped_column(String(63))  # the role whose password is changed
+    ssl: Mapped[str] = mapped_column(
+        String(16), default="require"
+    )  # disable | require | verify-full
+    # How Rekey connects to change it: this user's password is read from another secret in the
+    # same environment, so it is never stored on the policy itself.
+    admin_user: Mapped[str] = mapped_column(String(63))
+    admin_secret_path: Mapped[str] = mapped_column(String(512), default="/")
+    admin_secret_name: Mapped[str] = mapped_column(String(256))
+    interval_hours: Mapped[int] = mapped_column(Integer, default=720)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    next_due: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    last_status: Mapped[str] = mapped_column(String(8), default="")  # "" | ok | error
+    last_error: Mapped[str] = mapped_column(String(500), default="")
+    last_version: Mapped[int | None] = mapped_column(Integer, default=None)
+    created_by: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

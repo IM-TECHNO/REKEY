@@ -67,7 +67,31 @@ apply directly; those changes are audited. Keep the superadmin list short.
   request in flight during the switch may fail once and can be retried. Distribute the new shares
   before closing the dialog; they are not shown again.
 - **Secret values** (the actual passwords and API keys) are rotated by you at their source and then
-  updated in Rekey. Automatic rotation is not built yet.
+  updated in Rekey, except Postgres role passwords, which Rekey can rotate itself (next section).
+
+## Rotating Postgres passwords automatically
+
+Rotation page (superadmin): a policy says "every N hours, change the password of role R on Postgres
+server H and store it as a new version of secret S". Rekey connects as an admin user whose password
+is read from **another secret in the same environment** (nothing is stored on the policy). Only
+superadmins can create policies, because Rekey will connect to the host they type.
+
+Each run: open a transaction on the target and `ALTER ROLE`; write the new 32-character password to
+Rekey; then commit the target. If the target commit fails, the previous value is written back; if
+the Rekey write fails, the target is rolled back. A failure is shown on the page (passwords are
+masked in messages), audited as `rotation.fail`, and retried after 15 minutes; a success is audited
+as `rotation.run` by `rekey-rotator`. The scheduler only runs while the server is unsealed, and a
+manual "Rotate now" is always available. Protected environments do not ask for approval: the policy
+itself is the approval, and only a superadmin can create it.
+
+Things to plan for:
+
+- The old password stops working at once. Applications must fetch the secret again (for example by
+  restarting under `rekey run`). There is no overlap period or two-role handover yet.
+- Give Rekey an admin user that may only `ALTER` the roles it rotates (a role with `CREATEROLE`,
+  not a superuser, where your Postgres version allows it).
+- Use `require` or `verify-full` TLS. `disable` is for local testing.
+- If the role being rotated is the admin user itself, point the admin secret at the same secret.
 
 ## Backups and restore
 
@@ -143,7 +167,7 @@ restart, unseal) after any use. Everything done with it is audited as `bootstrap
 
 - No automatic unseal; each restart needs the shares.
 - One API process; no high availability.
-- No automatic secret rotation, dynamic secrets, PKI or SSH certificates.
+- Secret rotation covers Postgres role passwords only; no dynamic secrets, PKI or SSH certificates.
 - The unsealed key lives in Python process memory, which cannot be reliably wiped. The container
   disables core dumps and runs read-only without capabilities; keep the host patched and access limited.
 

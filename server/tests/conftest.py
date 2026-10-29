@@ -28,6 +28,7 @@ async def client() -> AsyncIterator[AsyncClient]:
             await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        c.app = app  # type: ignore[attr-defined]
         yield c
     await app.state.engine.dispose()
 

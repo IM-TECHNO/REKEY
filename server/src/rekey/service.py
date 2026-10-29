@@ -13,6 +13,7 @@ from rekey.models import (
     EnvKey,
     Grant,
     Project,
+    Rotation,
     SealRow,
     Secret,
     SecretVersion,
@@ -162,6 +163,7 @@ async def _purge_environment(db: AsyncSession, env_id: str) -> int:
     await db.execute(delete(SecretVersion).where(SecretVersion.secret_id.in_(secret_ids)))
     await db.execute(delete(Secret).where(Secret.environment_id == env_id))
     await db.execute(delete(ChangeRequest).where(ChangeRequest.environment_id == env_id))
+    await db.execute(delete(Rotation).where(Rotation.environment_id == env_id))
     await db.execute(delete(EnvKey).where(EnvKey.environment_id == env_id))
     await db.execute(delete(Grant).where(Grant.environment_id == env_id))
     await db.execute(delete(Environment).where(Environment.id == env_id))
