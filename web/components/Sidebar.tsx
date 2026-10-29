@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useState } from "react";
 import { useFetch } from "@/lib/api";
 import { useSession } from "@/lib/session";
 
@@ -17,24 +18,29 @@ const icons: Record<string, string> = {
   audit: "M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01",
 };
 
-type Item = { href: string; label: string; icon: string; admin?: boolean; soon?: boolean };
+type Item = { href: string; label: string; icon: string; hint: string };
 
-const items: Item[] = [
-  { href: "/secrets", label: "Secrets", icon: "secrets" },
-  { href: "/approvals", label: "Approvals", icon: "approvals" },
-  { href: "/insights", label: "Insights", icon: "insights", admin: true },
-  { href: "/projects", label: "Projects", icon: "projects", admin: true },
-  { href: "/rotation", label: "Rotation", icon: "rotation", admin: true },
-  { href: "/access", label: "Access control", icon: "access", admin: true },
-  { href: "/audit", label: "Audit log", icon: "audit", admin: true },
-  { href: "/security", label: "Security", icon: "security", admin: true },
+const workspace: Item[] = [
+  { href: "/secrets", label: "Secrets", icon: "secrets", hint: "Browse and edit secrets" },
+  { href: "/approvals", label: "Approvals", icon: "approvals", hint: "Changes waiting for a second person" },
 ];
+
+const admin: Item[] = [
+  { href: "/insights", label: "Insights", icon: "insights", hint: "Usage, stale secrets, anomalies" },
+  { href: "/projects", label: "Projects", icon: "projects", hint: "Projects and environments" },
+  { href: "/rotation", label: "Rotation", icon: "rotation", hint: "Scheduled password and key rotation" },
+  { href: "/access", label: "Access control", icon: "access", hint: "Who can do what" },
+  { href: "/audit", label: "Audit log", icon: "audit", hint: "Every action, tamper-evident" },
+  { href: "/security", label: "Security", icon: "security", hint: "Seal, rotate keys, rekey" },
+];
+
+const KEY = "rekey-sidebar";
 
 function Icon({ d }: { d: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
-      className="h-[18px] w-[18px]"
+      className="h-[18px] w-[18px] shrink-0"
       fill="none"
       stroke="currentColor"
       strokeWidth="1.8"
@@ -49,43 +55,97 @@ function Icon({ d }: { d: string }) {
 export default function Sidebar() {
   const path = usePathname();
   const { who } = useSession();
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(KEY) === "collapsed";
+    } catch {
+      return false;
+    }
+  });
   // Requests waiting for *this* person's decision.
   const open = useFetch<{ can_decide: boolean }[]>("/v1/change-requests?status=open");
   const waiting = (open.data ?? []).filter((r) => r.can_decide).length;
-  return (
-    <aside className="w-14 shrink-0 border-r border-border bg-surface flex flex-col items-center py-3 gap-1">
-      <div
-        title="Rekey"
-        className="mb-3 h-8 w-8 border border-accent/40 bg-accent/15 text-accent grid place-items-center text-sm font-bold"
+
+  function toggle() {
+    const next = !collapsed;
+    setCollapsed(next);
+    try {
+      localStorage.setItem(KEY, next ? "collapsed" : "open");
+    } catch {
+      /* the preference just is not remembered */
+    }
+  }
+
+  function row(i: Item) {
+    const active = path.startsWith(i.href);
+    return (
+      <Link
+        key={i.href}
+        href={i.href}
+        title={collapsed ? i.label : i.hint}
+        aria-label={i.label}
+        aria-current={active ? "page" : undefined}
+        className={`relative flex items-center gap-3 h-9 ${collapsed ? "w-9 justify-center" : "w-full px-3"} text-sm ${
+          active ? "bg-surface-2 text-accent" : "text-muted hover:text-foreground hover:bg-surface-2"
+        }`}
       >
-        R
+        <Icon d={icons[i.icon]} />
+        {!collapsed && <span className="truncate">{i.label}</span>}
+        {i.href === "/approvals" && waiting > 0 && (
+          <span
+            className={`bg-accent text-black text-[10px] font-semibold grid place-items-center h-4 min-w-4 px-1 ${
+              collapsed ? "absolute -top-0.5 -right-0.5" : "ml-auto"
+            }`}
+            title={`${waiting} waiting for your decision`}
+          >
+            {waiting}
+          </span>
+        )}
+      </Link>
+    );
+  }
+
+  const heading = (text: string) =>
+    collapsed ? (
+      <div className="my-1 h-px w-6 bg-border" />
+    ) : (
+      <div className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wide text-muted">{text}</div>
+    );
+
+  return (
+    <aside
+      className={`${collapsed ? "w-14 items-center" : "w-52"} shrink-0 border-r border-border bg-surface flex flex-col py-3 gap-0.5`}
+    >
+      <div className={`mb-2 flex items-center gap-2 ${collapsed ? "justify-center" : "px-3"}`}>
+        <span
+          title="Rekey"
+          className="h-8 w-8 shrink-0 border border-accent/40 bg-accent/15 text-accent grid place-items-center text-sm font-bold"
+        >
+          R
+        </span>
+        {!collapsed && <span className="text-base font-semibold tracking-tight">Rekey</span>}
       </div>
-      {items
-        .filter((i) => !i.admin || who?.superadmin)
-        .map((i) => {
-          const active = path.startsWith(i.href);
-          return (
-            <Link
-              key={i.label}
-              href={i.soon ? "#" : i.href}
-              title={i.soon ? `${i.label} (not built yet)` : i.label}
-              aria-label={i.label}
-              className={`relative h-9 w-9 grid place-items-center ${
-                active ? "bg-surface-2 text-accent" : "text-muted hover:text-foreground hover:bg-surface-2"
-              } ${i.soon ? "opacity-40 pointer-events-none" : ""}`}
-            >
-              <Icon d={icons[i.icon]} />
-              {i.href === "/approvals" && waiting > 0 && (
-                <span
-                  className="absolute -top-0.5 -right-0.5 h-4 min-w-4 px-1 bg-accent text-black text-[10px] font-semibold grid place-items-center"
-                  title={`${waiting} waiting for your decision`}
-                >
-                  {waiting}
-                </span>
-              )}
-            </Link>
-          );
-        })}
+      {heading("Workspace")}
+      {workspace.map(row)}
+      {who?.superadmin && (
+        <>
+          {heading("Admin")}
+          {admin.map(row)}
+        </>
+      )}
+      <button
+        onClick={toggle}
+        title={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+        aria-label={collapsed ? "Expand the sidebar" : "Collapse the sidebar"}
+        className={`mt-auto flex items-center gap-3 h-9 text-xs text-muted hover:text-foreground hover:bg-surface-2 ${
+          collapsed ? "w-9 justify-center" : "w-full px-3"
+        }`}
+      >
+        <svg viewBox="0 0 24 24" className="h-[18px] w-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d={collapsed ? "M9 6l6 6-6 6" : "M15 6l-6 6 6 6"} />
+        </svg>
+        {!collapsed && <span>Collapse</span>}
+      </button>
     </aside>
   );
 }

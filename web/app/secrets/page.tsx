@@ -14,8 +14,14 @@ import {
   primaryCls,
 } from "@/components/ui";
 
-const tabs = ["Home", "Overview", "Access", "Syncing", "Logs", "Settings"];
-const live = new Set(["Home", "Overview"]);
+const tabs = ["Home", "Overview"];
+// Shortcuts to the admin pages that concern a project (only shown to superadmins).
+const adminLinks = [
+  { label: "Access", href: "/access" },
+  { label: "Rotation", href: "/rotation" },
+  { label: "Logs", href: "/audit" },
+  { label: "Settings", href: "/projects" },
+];
 const NAME_RE = /^[A-Za-z0-9_.-]{1,256}$/;
 const dots = ["#60a5fa", "#fbbf24", "#8b93a1", "#4ade80", "#a78bfa"];
 
@@ -198,14 +204,24 @@ export default function SecretsPage() {
           {tabs.map((t) => (
             <button
               key={t}
-              onClick={() => live.has(t) && setTab(t)}
-              className={`pb-2 border-b-2 ${
+              onClick={() => setTab(t)}
+              className={`pb-2 border-b-2 hover:text-foreground ${
                 tab === t ? "border-accent text-foreground" : "border-transparent text-muted"
-              } ${live.has(t) ? "hover:text-foreground" : "opacity-40 cursor-default"}`}
+              }`}
             >
               {t}
             </button>
           ))}
+          {who?.superadmin &&
+            adminLinks.map((l) => (
+              <a
+                key={l.label}
+                href={l.href}
+                className="pb-2 border-b-2 border-transparent text-muted hover:text-foreground"
+              >
+                {l.label}
+              </a>
+            ))}
         </div>
       </div>
       <div className="border-t border-border" />
