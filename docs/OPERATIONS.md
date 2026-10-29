@@ -18,6 +18,8 @@ see "Before production" at the end.
 ```bash
 cp .env.example .env            # fill in: generate every value with `openssl rand -hex 32`
 docker compose up -d --build    # Postgres + API + UI + edge proxy; only the edge is published
+# then open http://localhost:11000 (REKEY_PORT in .env changes the port; the default 11000 keeps
+# clear of the usual 3000/5432/8000 range)
 ```
 
 Kubernetes: `deploy/k8s/` (read its `kustomization.yaml`; the secret is created by hand).

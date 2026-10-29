@@ -2,7 +2,7 @@
 #
 #   cp .env.example .env      # then edit it: generate real random values
 #   docker compose up -d --build
-#   open http://localhost:3000   (put a TLS reverse proxy in front for anything real)
+#   open http://localhost:11000  (put a TLS reverse proxy in front for anything real)
 #
 # Only the edge proxy (nginx) is published. It sends /v1/* to the API and the rest to the UI, so
 # the CLI, CI jobs and the browser all use the same address. First run: initialise and unseal,
@@ -77,7 +77,7 @@ services:
       rekey-web:
         condition: service_healthy
     ports:
-      - "${REKEY_PORT:-3000}:8080"
+      - "${REKEY_PORT:-11000}:8080"
     volumes:
       - ./deploy/nginx/rekey.conf:/etc/nginx/conf.d/default.conf:ro
     read_only: true
