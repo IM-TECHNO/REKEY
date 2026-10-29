@@ -118,6 +118,45 @@ Things to plan for:
 - If the role being rotated is the admin user itself, point the admin secret at the same secret
   (single mode only).
 
+## Rotating API keys with a webhook
+
+For a key Rekey cannot change itself (Stripe, SendGrid, your own service), choose "API key (ask my own
+service)" in the Rotation dialog. Every N hours Rekey POSTs JSON to your URL and stores the key you
+answer with as a new secret version. You write the provider-specific part once, in any language.
+
+```
+POST https://keys.example.com/rotate
+Authorization: Bearer <token>
+X-Rekey-Timestamp: 1767000000
+X-Rekey-Signature: sha256=<hex HMAC-SHA256 of "<timestamp>." + body, keyed with the token>
+{"request_id": "...", "project": "myapp", "environment": "production",
+ "path": "/", "name": "STRIPE_KEY", "previous": null}
+
+200 OK   {"value": "<the new key>"}
+```
+
+- The **token** is another secret in the same environment; its name goes in "Token secret". Verify the
+  signature (and reject old timestamps) in your service, or anyone who finds the URL can trigger it.
+- `previous` holds the current key only if you tick "Include the old key", so your service can revoke
+  it after issuing the new one. Otherwise it is `null`.
+- Only `https` URLs (plain `http` only for localhost), no credentials in the URL, redirects are not
+  followed, and the answer must be HTTP 200 with a non-empty string up to 8192 characters.
+- A failed call leaves the secret as it was and is retried after 15 minutes. If the key was issued but
+  Rekey could not store it, the run says so; the next run asks for another one, so make your service
+  safe to call again (issue a fresh key, revoke the unused one).
+- Only superadmins create these, because Rekey will call a URL they choose, including addresses inside
+  your network. There is no two-account (zero downtime) mode: keep the old key alive in your service for
+  a grace period if clients need it.
+
+## Development auto-unseal (never for real secrets)
+
+`REKEY_DEV_UNSEAL_FILE=./dev-shares.txt` makes the server unseal itself at start from a file with one
+unseal share per line (`#` comments allowed; enough shares for the threshold). It removes the very
+protection sealing gives, so it **refuses to start while `REKEY_COOKIE_SECURE=true`** (a real
+deployment), logs a warning, audits the unseal as `dev-auto-unseal`, and the UI shows a banner while it
+is on. Use it for local development and demos. It does nothing until the server is initialised
+(`init` once, put two or three shares in the file, restart).
+
 ## Backups and restore
 
 Back up **Postgres** (`pg_dump`, daily, off the machine). It holds everything: secrets (encrypted),
@@ -190,9 +229,11 @@ restart, unseal) after any use. Everything done with it is audited as `bootstrap
 
 ## What Rekey does not do (yet)
 
-- No automatic unseal; each restart needs the shares.
+- No automatic unseal for real deployments; each restart needs the shares (a development-only file
+  option exists, see above).
 - One API process; no high availability.
-- Secret rotation covers Postgres and MySQL account passwords only; no dynamic secrets, PKI or SSH certificates.
+- Secret rotation covers Postgres and MySQL passwords and any key a webhook can issue; no dynamic
+  secrets, PKI or SSH certificates.
 - The unsealed key lives in Python process memory, which cannot be reliably wiped. The container
   disables core dumps and runs read-only without capabilities; keep the host patched and access limited.
 

@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     audit_anchor_token: str = ""  # optional Bearer token sent to the webhook
     audit_anchor_interval_seconds: int = 300
 
+    # DEVELOPMENT ONLY: a file with one base64 unseal share per line; the server unseals itself at
+    # start. It defeats the point of sealing, so it refuses to run with cookie_secure=true.
+    dev_unseal_file: str = ""
+
     session_ttl_minutes: int = 720
     ci_session_ttl_minutes: int = 15
 

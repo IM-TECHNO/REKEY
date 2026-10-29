@@ -30,12 +30,12 @@ def enabled(settings: Settings) -> bool:
     return bool(settings.audit_anchor_file or settings.audit_anchor_webhook)
 
 
-def check_webhook_url(url: str) -> None:
-    """The anchor carries no secrets, but a plaintext hop could be tampered with."""
+def check_webhook_url(url: str, name: str = "REKEY_AUDIT_ANCHOR_WEBHOOK") -> None:
+    """Plain http only to this machine: anything else could be read or tampered with."""
     parsed = urlparse(url)
     loopback = parsed.hostname in ("localhost", "127.0.0.1", "::1")
     if parsed.scheme != "https" and not (parsed.scheme == "http" and loopback):
-        raise ValueError("REKEY_AUDIT_ANCHOR_WEBHOOK must be an https URL")
+        raise ValueError(f"{name} must be an https URL")
 
 
 async def current_head(sessionmaker: async_sessionmaker[AsyncSession]) -> tuple[int, str] | None:

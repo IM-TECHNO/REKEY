@@ -10,6 +10,7 @@ export type SealStatus = {
   sealed: boolean;
   progress: number;
   threshold: number;
+  dev_unseal?: boolean;
 };
 
 export type EnvInfo ={ slug: string; name: string; protected: boolean };
@@ -38,7 +39,9 @@ export type IdentityInfo = {
 
 export type RotationInfo = {
   id: string;
-  kind: "postgres" | "mysql";
+  kind: "postgres" | "mysql" | "webhook";
+  url: string | null;
+  send_previous: boolean;
   user_host: string;
   name: string;
   path: string;

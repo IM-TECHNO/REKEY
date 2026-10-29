@@ -48,7 +48,7 @@ export default function RotationPage() {
       <div className="max-w-6xl p-8">
         <PageTitle
           title="Rotation"
-          sub="Change a database account's password (Postgres or MySQL) on a schedule and store the new one as a new secret version. Apps must fetch the secret again after a rotation."
+          sub="Change a database password (Postgres or MySQL), or ask your own service for a new API key, on a schedule and store the new one as a new secret version. Apps must fetch the secret again after a rotation."
         />
         <div className="mt-4 flex items-center gap-3">
           <select
@@ -76,7 +76,7 @@ export default function RotationPage() {
             <thead>
               <tr className="border-b border-border">
                 <th className={th}>Secret</th>
-                <th className={th}>Account @ server</th>
+                <th className={th}>Target</th>
                 <th className={th}>Every</th>
                 <th className={th}>Next</th>
                 <th className={th}>Last run</th>
@@ -91,9 +91,15 @@ export default function RotationPage() {
                   </td>
                   <td className={td + " font-mono text-muted"}>
                     <Pill tone="ok">{r.kind}</Pill>{" "}
-                    {r.mode === "alternate" ? `${r.role} ⇄ ${r.role_b}` : r.role}
-                    {r.kind === "mysql" ? `@'${r.user_host}'` : ""} @ {r.host}:{r.port}
-                    {r.database ? `/${r.database}` : ""}
+                    {r.kind === "webhook" ? (
+                      r.url
+                    ) : (
+                      <>
+                        {r.mode === "alternate" ? `${r.role} ⇄ ${r.role_b}` : r.role}
+                        {r.kind === "mysql" ? `@'${r.user_host}'` : ""} @ {r.host}:{r.port}
+                        {r.database ? `/${r.database}` : ""}
+                      </>
+                    )}
                     {r.mode === "alternate" && (
                       <div className="mt-1 text-xs">
                         zero downtime · in use: <span className="text-foreground">{r.active_role}</span> · username in {r.username_secret_name}
@@ -167,6 +173,8 @@ export default function RotationPage() {
   );
 }
 
+type Kind = "postgres" | "mysql" | "webhook";
+
 function RotationModal({ base, onClose, onDone }: { base: string; onClose: () => void; onDone: () => void }) {
   const [f, setF] = useState({
     name: "",
@@ -181,46 +189,65 @@ function RotationModal({ base, onClose, onDone }: { base: string; onClose: () =>
     interval_hours: "720",
     role_b: "",
     username_secret_name: "",
+    url: "",
   });
   const [alternate, setAlternate] = useState(false);
-  const [kind, setKind] = useState<"postgres" | "mysql">("postgres");
+  const [sendPrevious, setSendPrevious] = useState(false);
+  const [kind, setKind] = useState<Kind>("postgres");
   const mysql = kind === "mysql";
-  function pickKind(k: "postgres" | "mysql") {
+  const webhook = kind === "webhook";
+  function pickKind(k: Kind) {
     setKind(k);
-    setF((x) => ({ ...x, port: k === "mysql" ? "3306" : "5432", database: k === "mysql" ? "" : "postgres" }));
+    setAlternate(false);
+    setF((x) => ({ ...x, port: k === "mysql" ? "3306" : "5432", database: k === "postgres" ? "postgres" : "" }));
   }
   const [err, setErr] = useState<string | null>(null);
   const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setF((x) => ({ ...x, [k]: e.target.value }));
-  const valid =
-    /^[A-Za-z0-9_.-]{1,256}$/.test(f.name) &&
+  const ident = /^[A-Za-z0-9_.$-]{1,63}$/;
+  const secretName = /^[A-Za-z0-9_.-]{1,256}$/;
+  const common = secretName.test(f.name) && secretName.test(f.admin_secret_name) && Number(f.interval_hours) >= 1;
+  const dbOk =
     /^[A-Za-z0-9._:-]{1,253}$/.test(f.host) &&
-    /^[A-Za-z0-9_.$-]{1,63}$/.test(f.role) &&
-    /^[A-Za-z0-9_.$-]{1,63}$/.test(f.admin_user) &&
-    (f.database === "" || /^[A-Za-z0-9_.$-]{1,63}$/.test(f.database)) &&
+    ident.test(f.role) &&
+    ident.test(f.admin_user) &&
+    (f.database === "" || ident.test(f.database)) &&
     (!mysql || /^[A-Za-z0-9._%:/-]{1,255}$/.test(f.user_host)) &&
     (!mysql || (f.role.length <= 32 && f.admin_user.length <= 32 && f.role_b.length <= 32)) &&
-    /^[A-Za-z0-9_.-]{1,256}$/.test(f.admin_secret_name) &&
     Number(f.port) >= 1 &&
-    Number(f.interval_hours) >= 1 &&
     (!alternate ||
-      (/^[A-Za-z0-9_.$-]{1,63}$/.test(f.role_b) &&
+      (ident.test(f.role_b) &&
         f.role_b !== f.role &&
-        /^[A-Za-z0-9_.-]{1,256}$/.test(f.username_secret_name) &&
+        secretName.test(f.username_secret_name) &&
         f.username_secret_name !== f.name));
+  const valid = common && (webhook ? /^https?:\/\/[^\s@]+$/.test(f.url) : dbOk);
 
   async function create() {
     try {
-      const { role_b, username_secret_name, user_host, database, ...rest } = f;
-      await api("POST", base, {
-        ...rest,
-        kind,
-        ...(database ? { database } : {}),
-        ...(mysql ? { user_host } : {}),
-        port: Number(f.port),
-        interval_hours: Number(f.interval_hours),
-        ...(alternate ? { mode: "alternate", role_b, username_secret_name } : {}),
-      });
+      const body = webhook
+        ? {
+            kind,
+            name: f.name,
+            url: f.url,
+            send_previous: sendPrevious,
+            admin_secret_name: f.admin_secret_name,
+            interval_hours: Number(f.interval_hours),
+          }
+        : {
+            kind,
+            name: f.name,
+            host: f.host,
+            port: Number(f.port),
+            ...(f.database ? { database: f.database } : {}),
+            ...(mysql ? { user_host: f.user_host } : {}),
+            role: f.role,
+            ssl: f.ssl,
+            admin_user: f.admin_user,
+            admin_secret_name: f.admin_secret_name,
+            interval_hours: Number(f.interval_hours),
+            ...(alternate ? { mode: "alternate", role_b: f.role_b, username_secret_name: f.username_secret_name } : {}),
+          };
+      await api("POST", base, body);
       onDone();
     } catch (e) {
       setErr(errorText(e));
@@ -230,74 +257,96 @@ function RotationModal({ base, onClose, onDone }: { base: string; onClose: () =>
   return (
     <Modal title="New rotation" onClose={onClose}>
       <div className="space-y-4">
-        <Field label="Secret to write" hint="Holds the role's password, e.g. DB_PASSWORD. Created on the first rotation.">
-          <input value={f.name} onChange={set("name")} className={inputCls + " font-mono"} autoFocus />
-        </Field>
-        <Field label="Database">
-          <select value={kind} onChange={(e) => pickKind(e.target.value as "postgres" | "mysql")} className={inputCls}>
-            <option value="postgres">PostgreSQL</option>
-            <option value="mysql">MySQL</option>
+        <Field label="What to rotate">
+          <select value={kind} onChange={(e) => pickKind(e.target.value as Kind)} className={inputCls}>
+            <option value="postgres">PostgreSQL password</option>
+            <option value="mysql">MySQL password</option>
+            <option value="webhook">API key (ask my own service)</option>
           </select>
         </Field>
-        <div className="grid grid-cols-3 gap-3">
-          <div className="col-span-2">
-            <Field label="Server host">
-              <input value={f.host} onChange={set("host")} className={inputCls + " font-mono"} />
+        <Field label="Secret to write" hint="Holds the new password or key. Created on the first rotation.">
+          <input value={f.name} onChange={set("name")} className={inputCls + " font-mono"} autoFocus />
+        </Field>
+
+        {webhook ? (
+          <>
+            <Field label="Webhook URL" hint="Rekey POSTs a signed request here and stores the {&quot;value&quot;: ...} it answers with. https only (http for localhost).">
+              <input value={f.url} onChange={set("url")} className={inputCls + " font-mono"} placeholder="https://keys.example.com/rotate" />
             </Field>
-          </div>
-          <Field label="Port">
-            <input value={f.port} onChange={set("port")} className={inputCls} inputMode="numeric" />
-          </Field>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label={mysql ? "Schema (optional)" : "Database"}>
-            <input value={f.database} onChange={set("database")} className={inputCls + " font-mono"} />
-          </Field>
-          <Field label="TLS">
-            <select value={f.ssl} onChange={set("ssl")} className={inputCls}>
-              <option value="require">require</option>
-              <option value="verify-full">verify-full</option>
-              <option value="disable">disable (local only)</option>
-            </select>
-          </Field>
-        </div>
-        <div className={mysql ? "grid grid-cols-2 gap-3" : ""}>
-          <Field label={mysql ? "User to rotate" : "Role to rotate"} hint="Its password is replaced on every run.">
-            <input value={f.role} onChange={set("role")} className={inputCls + " font-mono"} />
-          </Field>
-          {mysql && (
-            <Field label="Account host" hint="The part after @, e.g. % or 10.0.%">
-              <input value={f.user_host} onChange={set("user_host")} className={inputCls + " font-mono"} />
+            <Field label="Token secret" hint="Name of a secret in this environment. It signs the request, so your service can verify it came from Rekey.">
+              <input value={f.admin_secret_name} onChange={set("admin_secret_name")} className={inputCls + " font-mono"} />
             </Field>
-          )}
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Admin user" hint="Allowed to ALTER that role.">
-            <input value={f.admin_user} onChange={set("admin_user")} className={inputCls + " font-mono"} />
-          </Field>
-          <Field label="Admin password secret" hint="Name of a secret in this environment.">
-            <input value={f.admin_secret_name} onChange={set("admin_secret_name")} className={inputCls + " font-mono"} />
-          </Field>
-        </div>
-        <label className="flex items-start gap-2 text-sm">
-          <input type="checkbox" checked={alternate} onChange={(e) => setAlternate(e.target.checked)} className="mt-1" />
-          <span>
-            Zero downtime (two roles)
-            <span className="block text-xs text-muted">
-              Each run changes the role apps are not using, then points the secrets at it. The role in use keeps
-              working for a full interval. Both roles must already exist with the same rights.
-            </span>
-          </span>
-        </label>
-        {alternate && (
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Second role">
-              <input value={f.role_b} onChange={set("role_b")} className={inputCls + " font-mono"} />
-            </Field>
-            <Field label="Username secret" hint="Apps read this to learn which role to use.">
-              <input value={f.username_secret_name} onChange={set("username_secret_name")} className={inputCls + " font-mono"} />
-            </Field>
-          </div>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" checked={sendPrevious} onChange={(e) => setSendPrevious(e.target.checked)} className="mt-1" />
+              <span>
+                Include the old key in the request
+                <span className="block text-xs text-muted">So your service can revoke it. Leave off if it does not need it.</span>
+              </span>
+            </label>
+          </>
+        ) : (
+          <>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-2">
+                <Field label="Server host">
+                  <input value={f.host} onChange={set("host")} className={inputCls + " font-mono"} />
+                </Field>
+              </div>
+              <Field label="Port">
+                <input value={f.port} onChange={set("port")} className={inputCls} inputMode="numeric" />
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label={mysql ? "Schema (optional)" : "Database"}>
+                <input value={f.database} onChange={set("database")} className={inputCls + " font-mono"} />
+              </Field>
+              <Field label="TLS">
+                <select value={f.ssl} onChange={set("ssl")} className={inputCls}>
+                  <option value="require">require</option>
+                  <option value="verify-full">verify-full</option>
+                  <option value="disable">disable (local only)</option>
+                </select>
+              </Field>
+            </div>
+            <div className={mysql ? "grid grid-cols-2 gap-3" : ""}>
+              <Field label={mysql ? "User to rotate" : "Role to rotate"} hint="Its password is replaced on every run.">
+                <input value={f.role} onChange={set("role")} className={inputCls + " font-mono"} />
+              </Field>
+              {mysql && (
+                <Field label="Account host" hint="The part after @, e.g. % or 10.0.%">
+                  <input value={f.user_host} onChange={set("user_host")} className={inputCls + " font-mono"} />
+                </Field>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Admin user" hint="Allowed to change that account.">
+                <input value={f.admin_user} onChange={set("admin_user")} className={inputCls + " font-mono"} />
+              </Field>
+              <Field label="Admin password secret" hint="Name of a secret in this environment.">
+                <input value={f.admin_secret_name} onChange={set("admin_secret_name")} className={inputCls + " font-mono"} />
+              </Field>
+            </div>
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" checked={alternate} onChange={(e) => setAlternate(e.target.checked)} className="mt-1" />
+              <span>
+                Zero downtime (two accounts)
+                <span className="block text-xs text-muted">
+                  Each run changes the account apps are not using, then points the secrets at it. The account in use keeps
+                  working for a full interval. Both accounts must already exist with the same rights.
+                </span>
+              </span>
+            </label>
+            {alternate && (
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Second account">
+                  <input value={f.role_b} onChange={set("role_b")} className={inputCls + " font-mono"} />
+                </Field>
+                <Field label="Username secret" hint="Apps read this to learn which account to use.">
+                  <input value={f.username_secret_name} onChange={set("username_secret_name")} className={inputCls + " font-mono"} />
+                </Field>
+              </div>
+            )}
+          </>
         )}
         <Field label="Every (hours)">
           <input value={f.interval_hours} onChange={set("interval_hours")} className={inputCls} inputMode="numeric" />

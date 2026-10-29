@@ -6,7 +6,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from rekey import anchor, rotation, service
+from rekey import anchor, devunseal, rotation, service
 from rekey.api import router
 from rekey.auth_api import router as auth_router
 from rekey.changes import router as changes_router
@@ -29,6 +29,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app_: FastAPI) -> AsyncIterator[None]:
+        devunseal.check_allowed(settings)
+        if settings.dev_unseal_file:
+            await devunseal.try_unseal(app_)
         task: asyncio.Task[None] | None = None
         rot_task = asyncio.create_task(rotation.run_forever(app_))
         if anchor.enabled(settings):
@@ -52,6 +55,7 @@ def create_app(
     app.state.oidc = Provider(settings, http)
     app.state.limiter = RateLimiter()
     app.state.rotation_connector = RoutingConnector()
+    app.state.http = http
     app.state.rotation_locks = {}
     app.include_router(router)
     app.include_router(auth_router)

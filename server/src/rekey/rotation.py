@@ -22,21 +22,28 @@ Only superadmins create policies, because the host is chosen by them and Rekey c
 
 import asyncio
 import contextlib
+import hashlib
+import hmac
+import json
 import logging
 import secrets
 import ssl
 import string
+import time
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
+from urllib.parse import urlparse
 
 import aiomysql  # type: ignore[import-untyped]
 import asyncpg  # type: ignore[import-untyped]
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rekey import audit, service
+from rekey import anchor, audit, service
 from rekey.api import DB, Admin, Env, Ring, clean_name, clean_path, log
 from rekey.crypto import Keyring
 from rekey.models import Environment, Project, Rotation
@@ -195,6 +202,66 @@ class RoutingConnector:
         return await self._by_kind[r.kind].begin(r, admin_password, new, role, previous)
 
 
+_WEBHOOK_MAX_BYTES = 65536
+_WEBHOOK_VALUE_MAX = 8192
+
+
+async def _call_webhook(
+    http: httpx.AsyncClient | None,
+    r: Rotation,
+    token: str,
+    project: str,
+    environment: str,
+    previous: str | None,
+) -> str:
+    """Ask the policy's URL for a new key. The request is signed so the receiver can verify it.
+
+    Headers: `Authorization: Bearer <token>`, `X-Rekey-Timestamp`, and `X-Rekey-Signature:
+    sha256=HMAC(token, "<timestamp>." + body)`. The answer must be HTTP 200 with JSON
+    `{"value": ...}`.
+    """
+    body = json.dumps(
+        {
+            "request_id": str(uuid.uuid4()),
+            "project": project,
+            "environment": environment,
+            "path": r.path,
+            "name": r.name,
+            "previous": previous,  # only when the policy asks for it, so it can revoke the old key
+        },
+        separators=(",", ":"),
+    ).encode()
+    stamp = str(int(time.time()))
+    sig = hmac.new(token.encode(), f"{stamp}.".encode() + body, hashlib.sha256).hexdigest()
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}",
+        "X-Rekey-Timestamp": stamp,
+        "X-Rekey-Signature": f"sha256={sig}",
+    }
+    client = http or httpx.AsyncClient()
+    try:
+        resp = await client.post(
+            r.webhook_url or "", content=body, headers=headers, timeout=20, follow_redirects=False
+        )
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"could not reach the webhook ({exc.__class__.__name__})") from None
+    finally:
+        if http is None:
+            await client.aclose()
+    if resp.status_code != 200:
+        raise RuntimeError(f"the webhook answered HTTP {resp.status_code}")
+    if len(resp.content) > _WEBHOOK_MAX_BYTES:
+        raise RuntimeError("the webhook's answer is too large")
+    try:
+        value = resp.json().get("value")
+    except (ValueError, AttributeError):
+        raise RuntimeError('the webhook did not answer with JSON {"value": ...}') from None
+    if not isinstance(value, str) or not value or len(value) > _WEBHOOK_VALUE_MAX:
+        raise RuntimeError("the webhook's value must be a non-empty string up to 8192 characters")
+    return value
+
+
 def _clean(message: str, *hide: str) -> str:
     for h in hide:
         if h:
@@ -276,6 +343,7 @@ async def run_one(
     ring: Keyring,
     connector: Connector,
     rotation_id: str,
+    http: httpx.AsyncClient | None = None,
 ) -> RotationResult:
     """Rotate once. Never raises: the outcome is recorded on the policy and in the audit log."""
     async with sessionmaker() as db:
@@ -315,14 +383,18 @@ async def run_one(
                     previous[n] = None
             # Only single mode relies on the old password, so only then is it worth putting back.
             old_pw = previous[r.name]
-            session = await _begin_target(
-                connector,
-                r,
-                admin_password,
-                new,
-                role,
-                old_pw[0].decode() if old_pw is not None and not alternate else None,
-            )
+            if r.kind == "webhook":
+                sent = old_pw[0].decode() if old_pw is not None and r.send_previous else None
+                new = await _call_webhook(http, r, admin_password, slug, env_slug, sent)
+            else:
+                session = await _begin_target(
+                    connector,
+                    r,
+                    admin_password,
+                    new,
+                    role,
+                    old_pw[0].decode() if old_pw is not None and not alternate else None,
+                )
             writes = [
                 service.SecretWrite(r.path, r.name, new.encode(), _kind(previous[r.name])),
             ]
@@ -338,22 +410,27 @@ async def run_one(
             try:
                 version = (await service.put_secrets(db, ring, env, writes, actor=ACTOR))[0]
             except Exception:
+                if session is None:  # webhook: the provider already issued the key
+                    raise RuntimeError(
+                        "could not store the key the webhook issued; the next run asks for another"
+                    ) from None
                 await session.rollback()
                 session = None
                 raise
-            try:
-                await session.commit()
-                session = None
-            except Exception as exc:
-                session = None
+            if session is not None:
                 try:
-                    await _restore(db, ring, env, r.path, previous)
-                    restored = "previous value restored"
-                except Exception:  # noqa: BLE001
-                    restored = "previous value NOT restored, fix the secret by hand"
-                raise RuntimeError(
-                    f"the database refused the change ({exc.__class__.__name__}); {restored}"
-                ) from None
+                    await session.commit()
+                    session = None
+                except Exception as exc:
+                    session = None
+                    try:
+                        await _restore(db, ring, env, r.path, previous)
+                        restored = "previous value restored"
+                    except Exception:  # noqa: BLE001
+                        restored = "previous value NOT restored, fix the secret by hand"
+                    raise RuntimeError(
+                        f"the database refused the change ({exc.__class__.__name__}); {restored}"
+                    ) from None
         result = RotationResult(ok=True, version=version)
     except Exception as exc:  # noqa: BLE001 - recorded, not raised
         if session is not None:
@@ -404,7 +481,11 @@ async def run_forever(
                         continue
                     async with lock:
                         await run_one(
-                            app.state.sessionmaker, ring, app.state.rotation_connector, rid
+                            app.state.sessionmaker,
+                            ring,
+                            app.state.rotation_connector,
+                            rid,
+                            app.state.http,
                         )
         except asyncio.CancelledError:
             raise
@@ -422,20 +503,22 @@ router = APIRouter(prefix="/v1/projects/{project}/envs/{env}/rotations")
 class RotationCreate(BaseModel):
     name: str = Field(description="The secret that will hold the password")
     path: str = "/"
-    kind: Literal["postgres", "mysql"] = "postgres"
-    host: str = Field(pattern=_HOST)
+    kind: Literal["postgres", "mysql", "webhook"] = "postgres"
+    url: str | None = Field(None, max_length=500, description="webhook: where to ask for a key")
+    send_previous: bool = Field(False, description="webhook: include the old key in the request")
+    host: str | None = Field(None, pattern=_HOST)
     port: int | None = Field(None, ge=1, le=65535, description="default 5432 / 3306")
     database: str | None = Field(None, pattern=_IDENT, description="default postgres / none")
     user_host: str = Field("%", pattern=_MYSQL_HOST, description="MySQL only: the account's host")
-    role: str = Field(pattern=_IDENT, description="The role whose password is rotated")
+    role: str | None = Field(None, pattern=_IDENT, description="The role whose password is rotated")
     mode: Literal["single", "alternate"] = "single"
     role_b: str | None = Field(None, pattern=_IDENT, description="alternate: the second role")
     username_secret_name: str | None = Field(
         None, description="alternate: the secret that tells clients which role to use"
     )
     ssl: Literal["disable", "require", "verify-full"] = "require"
-    admin_user: str = Field(pattern=_IDENT)
-    admin_secret_name: str
+    admin_user: str | None = Field(None, pattern=_IDENT)
+    admin_secret_name: str = Field(description="database: the admin's password; webhook: the token")
     admin_secret_path: str = "/"  # noqa: S105 (a path, not a credential)
     interval_hours: int = Field(720, ge=1, le=8760)
     enabled: bool = True
@@ -451,6 +534,8 @@ def _out(r: Rotation) -> dict[str, Any]:
         "id": r.id,
         "kind": r.kind,
         "user_host": r.user_host,
+        "url": r.webhook_url,
+        "send_previous": r.send_previous,
         "name": r.name,
         "path": r.path,
         "host": r.host,
@@ -510,8 +595,29 @@ async def create_rotation(
     path, name = clean_path(body.path), clean_name(body.name)
     admin_path, admin_name = clean_path(body.admin_secret_path), clean_name(body.admin_secret_name)
     mysql = body.kind == "mysql"
+    host, port, role, admin_user = body.host, body.port, body.role, body.admin_user
+    if body.kind == "webhook":
+        if not body.url:
+            raise HTTPException(422, "a webhook rotation needs url")
+        if body.mode != "single" or body.role_b or body.username_secret_name:
+            raise HTTPException(422, "webhook rotations have no two-role mode")
+        try:
+            anchor.check_webhook_url(body.url, "the webhook url")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        parsed = urlparse(body.url)
+        if not parsed.hostname or parsed.username or parsed.password:
+            raise HTTPException(422, "the url needs a host and must not contain credentials")
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        role, admin_user = "", ""
+    else:
+        if not (host and role and admin_user):
+            raise HTTPException(422, "host, role and admin_user are required")
+        if body.url or body.send_previous:
+            raise HTTPException(422, "url and send_previous are only for webhook rotations")
     if mysql and any(
-        len(x) > _MYSQL_USER_MAX for x in (body.role, body.role_b or "", body.admin_user)
+        len(x) > _MYSQL_USER_MAX for x in (role or "", body.role_b or "", admin_user or "")
     ):
         raise HTTPException(422, f"MySQL user names are at most {_MYSQL_USER_MAX} characters")
     if not mysql and body.user_host != "%":
@@ -539,16 +645,20 @@ async def create_rotation(
         path=path,
         name=name,
         kind=body.kind,
-        host=body.host,
-        port=body.port or (3306 if mysql else 5432),
-        database=body.database if body.database is not None else ("" if mysql else "postgres"),
+        host=host or "",
+        port=port or (3306 if mysql else 5432),
+        database=body.database
+        if body.database is not None
+        else ("" if mysql or body.kind == "webhook" else "postgres"),
         user_host=body.user_host,
-        role=body.role,
+        webhook_url=body.url,
+        send_previous=body.send_previous,
+        role=role or "",
         mode=body.mode,
         role_b=body.role_b,
         username_secret_name=user_name,
         ssl=body.ssl,
-        admin_user=body.admin_user,
+        admin_user=admin_user or "",
         admin_secret_path=admin_path,
         admin_secret_name=admin_name,
         interval_hours=body.interval_hours,
@@ -617,5 +727,9 @@ async def run_now(
         raise HTTPException(409, "a rotation of this secret is already running")
     async with lock:
         return await run_one(
-            request.app.state.sessionmaker, ring, request.app.state.rotation_connector, row.id
+            request.app.state.sessionmaker,
+            ring,
+            request.app.state.rotation_connector,
+            row.id,
+            request.app.state.http,
         )

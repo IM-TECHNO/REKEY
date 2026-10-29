@@ -212,14 +212,18 @@ class StatusResponse(BaseModel):
     sealed: bool
     progress: int = 0
     threshold: int = 0
+    dev_unseal: bool = False  # the shares are read from a file: for development only
 
 
 async def _status(request: Request, db: AsyncSession) -> StatusResponse:
     ring = await load_ring(request, db)
+    dev = bool(request.app.state.settings.dev_unseal_file)
     if ring is None:
-        return StatusResponse(initialized=False, sealed=True)
+        return StatusResponse(initialized=False, sealed=True, dev_unseal=dev)
     have, need = ring.progress
-    return StatusResponse(initialized=True, sealed=ring.sealed, progress=have, threshold=need)
+    return StatusResponse(
+        initialized=True, sealed=ring.sealed, progress=have, threshold=need, dev_unseal=dev
+    )
 
 
 @router.get("/sys/status")

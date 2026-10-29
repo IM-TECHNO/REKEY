@@ -71,6 +71,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen">
       <Sidebar />
       <div className="flex-1 min-w-0 flex flex-col">
+        {seal.data?.dev_unseal && (
+          <div className="border-b border-warn/40 bg-warn/10 px-4 py-1.5 text-xs text-warn">
+            Development auto-unseal is on: the unseal shares are read from a file, so sealing protects
+            nothing. Never use this with real secrets.
+          </div>
+        )}
         <TopBar />
         <main className="flex-1 min-h-0 overflow-auto">{children}</main>
       </div>

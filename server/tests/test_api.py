@@ -10,7 +10,13 @@ S = "/v1/projects/app/envs/{}/secrets"
 
 async def test_status_before_init(client: AsyncClient) -> None:
     r = await client.get("/v1/sys/status")
-    assert r.json() == {"initialized": False, "sealed": True, "progress": 0, "threshold": 0}
+    assert r.json() == {
+        "initialized": False,
+        "sealed": True,
+        "progress": 0,
+        "threshold": 0,
+        "dev_unseal": False,
+    }
 
 
 async def test_init_requires_admin_and_only_once(client: AsyncClient) -> None:

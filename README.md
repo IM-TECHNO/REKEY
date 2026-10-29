@@ -21,7 +21,8 @@ feature gates. Self-hosted, Apache-2.0.
   person to approve them.
 - **Rotation**: rotate an environment's key (re-encrypting everything) or the root key (new shares).
 - **Secret rotation**: change a Postgres or MySQL account's password on a schedule and store it as a new
-  secret version, optionally with two alternating accounts so nothing breaks.
+  secret version, optionally with two alternating accounts so nothing breaks. For API keys of other
+  services, a signed webhook asks your own small service for a new key on a schedule.
 - **Audit**: every allowed and denied action, in a hash chain you can verify. Values are never logged.
 - **Insights**: reads per day, top readers, secret age, anomalies (new IP, denial bursts, failed logins).
 - **CLI**: `rekey run -p app -e dev -- npm start` injects secrets into a command's environment.
