@@ -460,6 +460,7 @@ async def list_projects(db: DB, who: Who) -> list[dict[str, object]]:
 class IdentityCreate(BaseModel):
     name: str = Field(pattern=r"^[A-Za-z0-9_.@-]{1,128}$")
     kind: Literal["user", "machine"] = "machine"
+    token_expires_at: datetime | None = None  # omit for a token that does not expire
 
 
 class GrantCreate(BaseModel):
@@ -473,15 +474,23 @@ class GrantCreate(BaseModel):
 @router.post("/identities", status_code=201)
 async def create_identity(
     request: Request, db: DB, body: IdentityCreate, who: Admin
-) -> dict[str, str]:
+) -> dict[str, object]:
+    expires = body.token_expires_at
+    if expires is not None:
+        if expires.tzinfo is None:
+            raise HTTPException(422, "token_expires_at must include a timezone")
+        if expires <= datetime.now(UTC):
+            raise HTTPException(422, "token_expires_at must be in the future")
     if (await db.execute(select(Identity).where(Identity.name == body.name))).scalar_one_or_none():
         raise service.Conflict(f"identity {body.name!r} exists")
     token, token_hash = rbac.new_token()
-    db.add(Identity(name=body.name, kind=body.kind, token_hash=token_hash))
+    db.add(
+        Identity(name=body.name, kind=body.kind, token_hash=token_hash, token_expires_at=expires)
+    )
     await db.commit()
     await log(request, who.name, "identity.create", target=body.name)
     # The token is shown exactly once; only its hash is stored.
-    return {"name": body.name, "token": token}
+    return {"name": body.name, "token": token, "token_expires_at": expires}
 
 
 @router.get("/identities")
@@ -494,6 +503,7 @@ async def list_identities(db: DB, _: Admin) -> list[dict[str, object]]:
             "email": r.email,
             "disabled": r.disabled,
             "created_at": r.created_at,
+            "token_expires_at": r.token_expires_at,
         }
         for r in rows
     ]

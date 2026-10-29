@@ -70,6 +70,12 @@ async def authenticate(
         identity = (
             await db.execute(select(Identity).where(Identity.token_hash == digest))
         ).scalar_one_or_none()
+        if (
+            identity is not None
+            and identity.token_expires_at is not None
+            and aware(identity.token_expires_at) <= datetime.now(UTC)
+        ):
+            return None
     elif token.startswith(SESSION_PREFIX):
         session = (
             await db.execute(select(Session).where(Session.token_hash == digest))

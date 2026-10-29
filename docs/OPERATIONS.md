@@ -48,6 +48,7 @@ Then set up GitLab login ([GITLAB-SETUP.md](GITLAB-SETUP.md)), sign in, and crea
 | Add a person | They sign in with GitLab once; then grant them access (Access control) |
 | Remove a person | Disable their identity (Access control). Their sessions end immediately |
 | Give prod access for a day | Grant with an expiry time |
+| Token that stops working on a date | Set "Token expires" when creating the machine identity (API: `token_expires_at`) |
 | Pipelines | Bind a GitLab project and branch to a machine identity ([GITLAB-SETUP.md](GITLAB-SETUP.md)) |
 | Review a change to a protected environment | Approvals page (or `rekey requests`, `rekey approve <id>`) |
 | Check nobody edited the log | Audit log page, "Verify chain" |

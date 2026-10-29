@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 from httpx import AsyncClient
@@ -186,3 +187,32 @@ async def test_path_and_name_validation(ready: AsyncClient) -> None:
     assert (
         await ready.put(url + "/bad name", headers=AUTH, json={"value": "x"})
     ).status_code == 422
+
+
+async def test_api_token_expires_when_an_expiry_is_set(ready: AsyncClient) -> None:
+    when = datetime.now(UTC) + timedelta(seconds=1)
+    r = await ready.post(
+        "/v1/identities", headers=AUTH, json={"name": "short", "token_expires_at": when.isoformat()}
+    )
+    assert r.status_code == 201 and r.json()["token_expires_at"] is not None
+    h = {"Authorization": f"Bearer {r.json()['token']}"}
+    assert (await ready.get("/v1/auth/whoami", headers=h)).status_code == 200
+    await asyncio.sleep(1.2)
+    assert (await ready.get("/v1/auth/whoami", headers=h)).status_code == 401
+    listed = (await ready.get("/v1/identities", headers=AUTH)).json()
+    assert [i["token_expires_at"] is not None for i in listed if i["name"] == "short"] == [True]
+
+
+async def test_token_expiry_must_be_future_and_timezone_aware(ready: AsyncClient) -> None:
+    past = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    naive = (datetime.now() + timedelta(days=1)).replace(tzinfo=None).isoformat()
+    for bad in (past, naive):
+        r = await ready.post(
+            "/v1/identities", headers=AUTH, json={"name": "bad", "token_expires_at": bad}
+        )
+        assert r.status_code == 422, bad
+
+
+async def test_token_without_expiry_keeps_working(ready: AsyncClient) -> None:
+    h = await make_identity(ready, "forever")
+    assert (await ready.get("/v1/auth/whoami", headers=h)).status_code == 200

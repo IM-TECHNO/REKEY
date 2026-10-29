@@ -50,6 +50,8 @@ class Identity(Base):
     # sha256 of the API token. OIDC users get a random, never-disclosed value: they log in via
     # sessions instead, so no usable API token exists for them.
     token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    # None = the API token never expires (the default, for compatibility).
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     external_id: Mapped[str | None] = mapped_column(String(255), default=None)  # OIDC `sub`
     email: Mapped[str | None] = mapped_column(String(320), default=None)
     disabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())

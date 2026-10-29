@@ -91,7 +91,10 @@ export default function AccessPage() {
                   <td className={td + " font-mono"}>{i.name}</td>
                   <td className={td}>{i.kind}</td>
                   <td className={td + " text-muted"}>{i.email ?? "—"}</td>
-                  <td className={td}>{i.disabled ? <Pill tone="danger">disabled</Pill> : <Pill tone="ok">active</Pill>}</td>
+                  <td className={td}>
+                    {i.disabled ? <Pill tone="danger">disabled</Pill> : i.token_expires_at && new Date(i.token_expires_at) <= new Date() ? <Pill tone="danger">token expired</Pill> : <Pill tone="ok">active</Pill>}
+                    {i.token_expires_at && <span className="ml-2 text-xs text-muted">token until {new Date(i.token_expires_at).toLocaleString()}</span>}
+                  </td>
                   <td className={td + " text-right space-x-3 text-xs"}>
                     {!i.disabled && (
                       <button
@@ -223,11 +226,16 @@ function IdentityModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
   const [token, setToken] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [expires, setExpires] = useState("");
   const valid = /^[A-Za-z0-9_.@-]{1,128}$/.test(name);
 
   async function create() {
     try {
-      const out = await api<{ token: string }>("POST", "/v1/identities", { name, kind: "machine" });
+      const out = await api<{ token: string }>("POST", "/v1/identities", {
+        name,
+        kind: "machine",
+        token_expires_at: expires ? new Date(expires).toISOString() : null,
+      });
       setToken(out.token);
       onDone();
     } catch (e) {
@@ -260,6 +268,9 @@ function IdentityModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
         <div className="space-y-4">
           <Field label="Name" hint="For a service, script or pipeline, e.g. ci-myapp-api">
             <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls + " font-mono"} autoFocus />
+          </Field>
+          <Field label="Token expires (optional)" hint="Leave empty for a token that does not expire. Pipelines are better off using GitLab CI login.">
+            <input type="datetime-local" value={expires} onChange={(e) => setExpires(e.target.value)} className={inputCls} />
           </Field>
           <ErrorBanner message={err} />
           <div className="flex justify-end gap-2">

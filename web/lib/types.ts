@@ -33,6 +33,7 @@ export type IdentityInfo = {
   email: string | null;
   disabled: boolean;
   created_at: string;
+  token_expires_at: string | null;
 };
 
 export type GrantInfo = {

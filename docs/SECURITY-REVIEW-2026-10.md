@@ -116,8 +116,8 @@ Paths longer than 512 characters are refused with 422.
 4. **Group removal does not end existing sessions.** Removing someone from the GitLab group stops new
    logins; an open session lasts up to `REKEY_SESSION_TTL_MINUTES` (12 h). To cut access at once,
    disable their identity in Rekey.
-5. **API tokens (`rk_`) never expire**, until the identity is deleted. Prefer GitLab CI sessions
-   (15 minutes) for pipelines.
+5. **API tokens (`rk_`) do not expire unless you set an expiry** when creating the identity
+   (`token_expires_at`, added after this review). Prefer GitLab CI sessions (15 minutes) for pipelines.
 6. **Rate limits are per exact IP and per process.** An IPv6 attacker can rotate addresses inside a
    /64. Fine for a small deployment; a shared store and prefix grouping would be needed at scale.
 7. **`/v1/sys/status` is unauthenticated** and shows initialised, sealed, threshold and progress.
