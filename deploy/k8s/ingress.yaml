@@ -1,0 +1,24 @@
+# /v1 goes straight to the API, everything else to the UI. The ingress controller (Traefik on k3s)
+# appends the client address to X-Forwarded-For, which is what REKEY_TRUSTED_PROXY_HOPS relies on.
+# Put TLS on it: Rekey sets Secure cookies and GitLab requires an https redirect URI.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rekey
+spec:
+  # ingressClassName: traefik   # set if your cluster has more than one controller
+  tls:
+    - hosts: ["rekey.example.com"]
+      secretName: rekey-tls      # create with cert-manager or by hand
+  rules:
+    - host: rekey.example.com
+      http:
+        paths:
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service: { name: rekey-api, port: { number: 8000 } }
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: rekey-web, port: { number: 3000 } }

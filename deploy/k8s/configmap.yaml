@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rekey-config
+data:
+  # Hops of reverse proxy in front of the API that set X-Forwarded-For. With Traefik/ingress-nginx
+  # as the only proxy this is 1. If a cloud load balancer sits in front of the ingress and passes the
+  # client address in X-Forwarded-For, use 2. If client addresses are lost (SNAT), rate limits and
+  # audit IPs will show the proxy: set externalTrafficPolicy: Local on the ingress Service.
+  REKEY_TRUSTED_PROXY_HOPS: "1"
+  REKEY_COOKIE_SECURE: "true"
+  REKEY_CI_AUDIENCE: "rekey"
+  # GitLab login (docs/GITLAB-SETUP.md). The client secret goes in the Secret, not here.
+  REKEY_OIDC_ISSUER: "https://gitlab.example.com"
+  REKEY_OIDC_CLIENT_ID: "replace-with-gitlab-application-id"
+  REKEY_OIDC_REDIRECT_URI: "https://rekey.example.com/v1/auth/oidc/callback"
+  REKEY_OIDC_REQUIRED_GROUP: ""
+  # GitLab numeric user ids of the Rekey administrators, comma separated.
+  REKEY_SUPERADMIN_SUBJECTS: ""

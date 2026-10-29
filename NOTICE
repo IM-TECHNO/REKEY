@@ -1,0 +1,8 @@
+Rekey
+Copyright 2026 Rekey contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Rekey is an independent, clean-room implementation. It contains no code from Infisical,
+Phase, Akeyless, HashiCorp Vault or OpenBao. Those products were studied only through their
+public documentation and feature descriptions.

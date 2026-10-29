@@ -1,0 +1,73 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+import httpx
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from rekey import service
+from rekey.api import router
+from rekey.auth_api import router as auth_router
+from rekey.changes import router as changes_router
+from rekey.config import Settings
+from rekey.crypto.errors import DecryptionError, SealedError
+from rekey.db import make_engine, make_sessionmaker
+from rekey.insights import router as insights_router
+from rekey.oidc import Provider
+from rekey.ratelimit import RateLimiter
+
+
+def create_app(
+    settings: Settings | None = None, http_client: httpx.AsyncClient | None = None
+) -> FastAPI:
+    settings = settings or Settings()
+    owns_client = http_client is None
+    http = http_client or httpx.AsyncClient(timeout=10.0, follow_redirects=False)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        yield
+        if owns_client:
+            await http.aclose()
+
+    app = FastAPI(title="Rekey", version="0.0.1", lifespan=lifespan)
+    app.state.settings = settings
+    app.state.engine = make_engine(settings.database_url)
+    app.state.sessionmaker = make_sessionmaker(app.state.engine)
+    app.state.keyring = None
+    app.state.oidc = Provider(settings, http)
+    app.state.limiter = RateLimiter()
+    app.include_router(router)
+    app.include_router(auth_router)
+    app.include_router(insights_router)
+    app.include_router(changes_router)
+
+    @app.middleware("http")
+    async def no_store(request: Request, call_next):  # type: ignore[no-untyped-def]
+        # Secrets, shares and tokens travel in these responses: no browser or proxy may keep one.
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.exception_handler(service.NotFound)
+    async def _not_found(_: Request, exc: service.NotFound) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=404)
+
+    @app.exception_handler(service.Conflict)
+    async def _conflict(_: Request, exc: service.Conflict) -> JSONResponse:
+        return JSONResponse({"detail": str(exc)}, status_code=409)
+
+    @app.exception_handler(SealedError)
+    async def _sealed(_: Request, __: SealedError) -> JSONResponse:
+        return JSONResponse({"detail": "sealed"}, status_code=503)
+
+    @app.exception_handler(DecryptionError)
+    async def _decrypt(_: Request, __: DecryptionError) -> JSONResponse:
+        # Never leak why decryption failed.
+        return JSONResponse({"detail": "internal error"}, status_code=500)
+
+    return app

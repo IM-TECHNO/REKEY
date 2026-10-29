@@ -1,0 +1,25 @@
+# Rekey on Kubernetes (written for single-node k3s with Traefik, works on any cluster).
+#
+#   1. Create the secret (see secret.example.yaml), it is deliberately NOT part of this file.
+#   2. Edit configmap.yaml and ingress.yaml (host names), and `images:` below (your registry).
+#   3. kubectl apply -k deploy/k8s
+#   4. Initialise and unseal: docs/OPERATIONS.md
+#
+# Nothing here is applied for you. Review it first.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: rekey
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - api.yaml
+  - web.yaml
+  - ingress.yaml
+  - networkpolicy.yaml
+images:
+  - name: rekey-api
+    newName: registry.example.com/rekey-api   # <- your registry
+    newTag: "0.0.1"
+  - name: rekey-web
+    newName: registry.example.com/rekey-web   # <- your registry
+    newTag: "0.0.1"

@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rekey-api
+  labels: { app: rekey-api }
+spec:
+  # Exactly one pod, replaced only after the old one stops (never two at once): the unsealed key
+  # and the rate limiter live in that process's memory. After every restart the server is sealed
+  # again and needs its unseal shares (docs/OPERATIONS.md).
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: rekey-api }
+  template:
+    metadata:
+      labels: { app: rekey-api }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: api
+          image: rekey-api
+          ports:
+            - { name: http, containerPort: 8000 }
+          envFrom:
+            - configMapRef: { name: rekey-config }
+            - secretRef: { name: rekey-secrets }
+          env:
+            - { name: REKEY_AUTO_MIGRATE, value: "1" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 192Mi }
+            limits: { memory: 512Mi }
+      volumes:
+        - name: tmp
+          emptyDir: { medium: Memory, sizeLimit: 16Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rekey-api
+spec:
+  selector: { app: rekey-api }
+  ports:
+    - { name: http, port: 8000, targetPort: http }
