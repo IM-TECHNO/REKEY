@@ -1,7 +1,7 @@
 # Alerts
 
-Rekey can email an administrator when something needs a person, so a failed rotation does not sit
-unnoticed until the old password stops working.
+Rekey can email an administrator, and post to a chat channel, when something needs a person, so a failed
+rotation does not sit unnoticed until the old password stops working.
 
 | Event | Sent when |
 |---|---|
@@ -45,6 +45,26 @@ works at all times, never appears in a backup, and is as protected as the other 
 is accepted only when no login is set (an unauthenticated relay inside your network) or the server is
 on this machine: a login is never sent unencrypted to another host.
 
+## Chat
+
+Optional, next to or instead of email. Create an incoming webhook in your chat tool, put its address in
+`.env`, restart, then choose the format on the Alerts page:
+
+```
+REKEY_ALERT_WEBHOOK_URL=https://hooks.slack.com/services/...
+```
+
+| Format | Posts |
+|---|---|
+| Slack, Mattermost, Rocket.Chat | `{"text": ...}` (names are escaped so nothing can ping `@channel`) |
+| Discord | `{"content": ...}` with mentions disabled |
+| Any URL | `{"event", "subject", "where", "what", "actor", "ts"}`, for Teams (through a Power Automate flow), a pager or your own service |
+
+The address is a credential (anyone who has it can post to your channel), so it lives in `.env` like the
+SMTP password, and is never shown. It must be `https` (plain `http` only for this machine) and redirects
+are not followed. Email and chat share the event choices, the repeat rule and the hourly cap. **Save and
+send a test** tries both channels and shows each one's outcome.
+
 ## Behaviour you can rely on
 
 - **No repeats for the same problem.** A rotation that fails every 15 minutes is mailed once, then again
@@ -62,8 +82,7 @@ on this machine: a login is never sent unencrypted to another host.
 
 ## Limits
 
-- Email only. For chat or paging, point your mail server's rules at the alert address, or use the
-  audit log.
+- Email and one chat webhook. For paging, forward the mail or use the generic JSON format.
 - Alerts are sent by the one running API process. If it is down, nothing is sent; monitor
   `GET /health` from outside as well ([OPERATIONS.md](OPERATIONS.md)).
 - Alerts that the audit log records as **denied** are not mailed (they are for Insights).

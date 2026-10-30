@@ -17,7 +17,7 @@ export default function AlertsPage() {
       <div className="max-w-3xl p-8">
         <PageTitle
           title="Alerts"
-          sub="Email an administrator when something needs a person: a failed rotation, a change waiting for approval, a sealed server, a broken audit log."
+          sub="Tell an administrator when something needs a person: a failed rotation, a change waiting for approval, a sealed server, a broken audit log."
         />
         <div className="mt-4"><ErrorBanner message={info.error} /></div>
         {info.data && <AlertsForm key={info.data.updated_by + info.data.last_sent_at} info={info.data} onSaved={info.reload} />}
@@ -34,6 +34,7 @@ function AlertsForm({ info, onSaved }: { info: AlertSettings; onSaved: () => voi
   const [user, setUser] = useState(info.smtp_user);
   const [from, setFrom] = useState(info.mail_from);
   const [recipients, setRecipients] = useState(info.recipients.join("\n"));
+  const [hook, setHook] = useState(info.webhook_kind);
   const [events, setEvents] = useState<string[]>(info.events);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +49,7 @@ function AlertsForm({ info, onSaved }: { info: AlertSettings; onSaved: () => voi
     mail_from: from.trim(),
     recipients: recipients.split(/[\s,;]+/).filter(Boolean),
     events,
+    webhook_kind: hook,
   });
 
   async function save() {
@@ -90,7 +92,7 @@ function AlertsForm({ info, onSaved }: { info: AlertSettings; onSaved: () => voi
     <>
       <section className="mt-6 border border-border bg-surface p-5">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Email server (SMTP)</h2>
+          <h2 className="text-sm font-semibold">Email (SMTP)</h2>
           {enabled ? <Pill tone="ok">alerts on</Pill> : <Pill tone="muted">alerts off</Pill>}
         </div>
         <label className="mt-3 flex items-center gap-2 text-sm">
@@ -152,7 +154,32 @@ function AlertsForm({ info, onSaved }: { info: AlertSettings; onSaved: () => voi
       </section>
 
       <section className="mt-6 border border-border bg-surface p-5">
-        <h2 className="text-sm font-semibold">What to email about</h2>
+        <h2 className="text-sm font-semibold">Chat (optional)</h2>
+        <div className="mt-3 max-w-xs">
+          <Field label="Post alerts to">
+            <select className={inputCls} value={hook} onChange={(e) => setHook(e.target.value as AlertSettings["webhook_kind"])}>
+              <option value="off">Nowhere</option>
+              <option value="slack">Slack, Mattermost, Rocket.Chat</option>
+              <option value="discord">Discord</option>
+              <option value="generic">Any URL (plain JSON)</option>
+            </select>
+          </Field>
+        </div>
+        <p className="mt-3 text-xs text-muted">
+          Webhook address:{" "}
+          {info.webhook_url_set ? (
+            <span className="text-ok">set (from REKEY_ALERT_WEBHOOK_URL)</span>
+          ) : (
+            <span>
+              not set. Put <code>REKEY_ALERT_WEBHOOK_URL</code> in <code>.env</code> and restart. The address is a credential, so it is
+              kept out of the database.
+            </span>
+          )}
+        </p>
+      </section>
+
+      <section className="mt-6 border border-border bg-surface p-5">
+        <h2 className="text-sm font-semibold">What to be alerted about</h2>
         <div className="mt-3 space-y-2">
           {Object.entries(info.available_events).map(([name, label]) => (
             <label key={name} className="flex items-center gap-2 text-sm">
@@ -186,7 +213,7 @@ function AlertsForm({ info, onSaved }: { info: AlertSettings; onSaved: () => voi
 
       <div className="mt-4 flex items-center gap-2">
         <button className={primaryCls} onClick={save} disabled={busy}>Save</button>
-        <button className={btnCls} onClick={sendTest} disabled={busy || !host.trim()}>Save and send a test mail</button>
+        <button className={btnCls} onClick={sendTest} disabled={busy || (!host.trim() && hook === "off")}>Save and send a test</button>
         {info.last_sent_at && <span className="ml-2 text-xs text-muted">last alert sent {ago(info.last_sent_at)}</span>}
       </div>
     </>

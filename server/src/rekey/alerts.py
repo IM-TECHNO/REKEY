@@ -28,6 +28,7 @@ from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 from typing import Any, Literal
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -76,6 +77,15 @@ _SUBJECT = {
 
 def _one_line(text: str, limit: int = 300) -> str:
     return " ".join(text.split())[:limit]
+
+
+def _body(event: str, facts: dict[str, str]) -> str:
+    lines = [EVENTS.get(event, "Test") + ".", ""]
+    for label, name in (("Where", "where"), ("What", "what"), ("By", "actor")):
+        if facts.get(name):
+            lines.append(f"{label}: {facts[name]}")
+    lines += ["", "Open Rekey to look into it. Alerts never contain secret values."]
+    return "\n".join(lines)
 
 
 def _send_sync(
@@ -160,10 +170,12 @@ class Notifier:
         settings: Settings,
         sessionmaker: async_sessionmaker[AsyncSession],
         sender: Sender = _send_sync,
+        http: httpx.AsyncClient | None = None,
     ) -> None:
         self.settings = settings
         self.sessionmaker = sessionmaker
         self.sender = sender
+        self.http = http or httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=False)
         self.last_sent_at: datetime | None = None
         self.last_error: str = ""
         self._recent: dict[str, float] = {}
@@ -224,31 +236,71 @@ class Notifier:
         """The problem is over: the next occurrence is mailed at once."""
         self._recent.pop(key, None)
 
+    def hook_ready(self, cfg: AlertConfig) -> bool:
+        return cfg.webhook_kind != "off" and bool(self.settings.alert_webhook_url)
+
+    async def post_hook(
+        self, cfg: AlertConfig, event: str, subject: str, facts: dict[str, str]
+    ) -> None:
+        """POST to the chat webhook. Raises with a message that cannot contain the URL."""
+        text = _body(event, facts)
+        if cfg.webhook_kind == "slack":
+            # Slack (and Mattermost, Rocket.Chat): escape so a name cannot ping @channel.
+            esc = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            payload: dict[str, Any] = {"text": f"*{subject}*\n{esc}"}
+        elif cfg.webhook_kind == "discord":
+            payload = {
+                "content": f"**{subject}**\n{text}"[:1900],
+                "allowed_mentions": {"parse": []},
+            }
+        else:
+            payload = {
+                "event": event,
+                "subject": subject,
+                "where": facts.get("where", ""),
+                "what": facts.get("what", ""),
+                "actor": facts.get("actor", ""),
+                "ts": datetime.now(UTC).isoformat(timespec="seconds"),
+            }
+        try:
+            resp = await self.http.post(self.settings.alert_webhook_url, json=payload)
+        except Exception as exc:  # noqa: BLE001 - httpx messages can carry the URL
+            raise RuntimeError(f"webhook failed ({exc.__class__.__name__})") from None
+        if resp.status_code >= 300:
+            raise RuntimeError(f"webhook answered {resp.status_code}")
+
     async def notify(self, event: str, key: str | None, facts: dict[str, str]) -> None:
         try:
-            mailer = await self.mailer()
-            if mailer is None or not mailer.cfg.enabled or not mailer.ready:
+            cfg = await self.config()
+            if cfg is None or event not in cfg.events.split(","):
                 return
-            if event not in mailer.cfg.events.split(","):
-                return
-            if not self._allowed_now(key):
+            mailer = Mailer(cfg, self.settings.smtp_password, self.sender)
+            email_on = cfg.enabled and mailer.ready
+            hook_on = self.hook_ready(cfg)
+            if not (email_on or hook_on) or not self._allowed_now(key):
                 return
             subject = f"[Rekey] {_SUBJECT[event]}"
             if facts.get("where"):
                 subject += f" ({facts['where']})"
-            lines = [EVENTS[event] + ".", ""]
-            for label, name in (("Where", "where"), ("What", "what"), ("By", "actor")):
-                if facts.get(name):
-                    lines.append(f"{label}: {facts[name]}")
-            lines += ["", "Open Rekey to look into it. This mail never contains secret values."]
-            try:
-                await mailer.send(subject, "\n".join(lines))
-            except Exception as exc:  # noqa: BLE001 - a broken mail server must not break Rekey
-                self.last_error = mailer.clean_error(exc)
-                logger.warning("alert mail failed: %s", self.last_error)
-                return
-            self.last_error = ""
-            self.last_sent_at = datetime.now(UTC)
+            errors: list[str] = []
+            delivered = False
+            if email_on:
+                try:
+                    await mailer.send(subject, _body(event, facts))
+                    delivered = True
+                except Exception as exc:  # noqa: BLE001 - a broken mail server must not break Rekey
+                    errors.append(f"email: {mailer.clean_error(exc)}")
+            if hook_on:
+                try:
+                    await self.post_hook(cfg, event, subject, facts)
+                    delivered = True
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"chat: {_one_line(str(exc))}")
+            self.last_error = "; ".join(errors)
+            if errors:
+                logger.warning("alert delivery failed: %s", self.last_error)
+            if delivered:
+                self.last_sent_at = datetime.now(UTC)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
@@ -334,6 +386,7 @@ class AlertIn(BaseModel):
     mail_from: str = Field("", max_length=254)
     recipients: list[str] = Field(default_factory=list, max_length=10)
     events: list[str] = Field(default_factory=list)
+    webhook_kind: Literal["off", "slack", "discord", "generic"] = "off"
 
 
 def _out(cfg: AlertConfig | None, notifier: Notifier) -> dict[str, Any]:
@@ -346,6 +399,7 @@ def _out(cfg: AlertConfig | None, notifier: Notifier) -> dict[str, Any]:
         mail_from="",
         recipients="",
         events=",".join(EVENTS),
+        webhook_kind="off",
         updated_by="",
         updated_at=datetime.now(UTC),
     )
@@ -360,13 +414,24 @@ def _out(cfg: AlertConfig | None, notifier: Notifier) -> dict[str, Any]:
         "events": [e for e in cfg.events.split(",") if e],
         "available_events": EVENTS,
         "password_set": bool(notifier.settings.smtp_password),
+        "webhook_kind": cfg.webhook_kind,
+        "webhook_url_set": bool(notifier.settings.alert_webhook_url),
         "last_sent_at": notifier.last_sent_at.isoformat() if notifier.last_sent_at else None,
         "last_error": notifier.last_error,
         "updated_by": cfg.updated_by,
     }
 
 
-def _validate(body: AlertIn, password: str) -> AlertIn:
+def _validate(body: AlertIn, password: str, hook_url: str = "") -> AlertIn:
+    if body.webhook_kind != "off":
+        if not hook_url:
+            raise HTTPException(
+                422, "chat alerts need REKEY_ALERT_WEBHOOK_URL in .env (then restart)"
+            )
+        try:
+            anchor.check_webhook_url(hook_url, "REKEY_ALERT_WEBHOOK_URL")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
     host = body.smtp_host.strip()
     sender = body.mail_from.strip()
     recipients = list(dict.fromkeys(r.strip().lower() for r in body.recipients if r.strip()))
@@ -406,7 +471,8 @@ async def get_alerts(request: Request, db: DB, who: Admin) -> dict[str, Any]:
 @router.put("")
 async def put_alerts(request: Request, db: DB, who: Admin, body: AlertIn) -> dict[str, Any]:
     notifier: Notifier = request.app.state.alerts
-    body = _validate(body, request.app.state.settings.smtp_password)
+    s = request.app.state.settings
+    body = _validate(body, s.smtp_password, s.alert_webhook_url)
     cfg = await db.get(AlertConfig, 1)
     if cfg is None:
         cfg = AlertConfig(id=1)
@@ -419,29 +485,54 @@ async def put_alerts(request: Request, db: DB, who: Admin, body: AlertIn) -> dic
     cfg.mail_from = body.mail_from
     cfg.recipients = ",".join(body.recipients)
     cfg.events = ",".join(e for e in EVENTS if e in body.events)
+    cfg.webhook_kind = body.webhook_kind
     cfg.updated_by = who.name
     cfg.updated_at = datetime.now(UTC)
     await db.commit()
-    await log(request, who.name, "alerts.update", target="on" if body.enabled else "off")
+    await log(
+        request,
+        who.name,
+        "alerts.update",
+        target=f"email {'on' if body.enabled else 'off'}, chat {body.webhook_kind}",
+    )
     return _out(cfg, notifier)
 
 
 @router.post("/test")
 async def send_test(request: Request, db: DB, who: Admin) -> dict[str, Any]:
-    """Send one mail right now and report the real outcome, so a wrong setting shows up here."""
+    """Send a test through every configured channel and report the real outcome of each."""
     notifier: Notifier = request.app.state.alerts
-    mailer = await notifier.mailer()
-    if mailer is None or not mailer.ready:
-        raise HTTPException(409, "save an SMTP host, a sender and a recipient first")
-    try:
-        await mailer.send(
-            "[Rekey] test mail",
-            f"This is a test from Rekey, sent by {who.name}.\n"
-            "If you can read it, alerts can reach you.",
+    cfg = await notifier.config()
+    mailer = Mailer(cfg, request.app.state.settings.smtp_password, notifier.sender) if cfg else None
+    email_on = mailer is not None and mailer.ready
+    hook_on = cfg is not None and notifier.hook_ready(cfg)
+    if not (email_on or hook_on):
+        raise HTTPException(
+            409, "save an SMTP host, a sender and a recipient, or a chat format, first"
         )
-    except Exception as exc:  # noqa: BLE001
-        message = mailer.clean_error(exc)
+    errors: list[str] = []
+    if email_on and mailer is not None:
+        try:
+            await mailer.send(
+                "[Rekey] test mail",
+                f"This is a test from Rekey, sent by {who.name}.\n"
+                "If you can read it, alerts can reach you.",
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"email: {mailer.clean_error(exc)}")
+    if hook_on and cfg is not None:
+        try:
+            await notifier.post_hook(
+                cfg,
+                "test",
+                "[Rekey] test message",
+                {"what": f"A test sent by {who.name}. If you can read it, alerts can reach you."},
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"chat: {_one_line(str(exc))}")
+    if errors:
+        message = "; ".join(errors)
         await log(request, who.name, "alerts.test", "deny", target=message[:200])
         return {"ok": False, "error": message}
-    await log(request, who.name, "alerts.test", target=f"{len(mailer.recipients)} recipient(s)")
+    await log(request, who.name, "alerts.test", target="ok")
     return {"ok": True, "error": ""}

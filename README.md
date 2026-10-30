@@ -31,8 +31,8 @@ feature gates. Self-hosted, Apache-2.0.
 - **Auto-unseal (optional)**: unseal after a restart through Vault/OpenBao Transit or AWS KMS instead of
   waiting for people, with the shares kept as the fallback. Off by default.
   See [docs/AUTO-UNSEAL.md](docs/AUTO-UNSEAL.md).
-- **Alerts**: email when a rotation fails, a change waits for approval, the server is sealed or the audit
-  log no longer checks out. SMTP is set in the UI. See [docs/ALERTS.md](docs/ALERTS.md).
+- **Alerts**: email, and Slack/Discord/any webhook, when a rotation fails, a change waits for approval, the server is sealed or the audit
+  log no longer checks out. Set up in the UI. See [docs/ALERTS.md](docs/ALERTS.md).
 - **Audit**: every allowed and denied action, in a hash chain you can verify. Values are never logged.
 - **Insights**: reads per day, top readers, secret age, anomalies (new IP, denial bursts, failed logins).
 - **CLI**: `rekey run -p app -e dev -- npm start` injects secrets into a command's environment.

@@ -1,8 +1,10 @@
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import update
@@ -420,3 +422,105 @@ async def test_a_real_smtp_server_receives_a_well_formed_mail(env) -> None:  # t
     text = received[0].decode()
     assert "From: rekey@example.com" in text and "To: ops@example.com, lead@example.com" in text
     assert "Subject: [Rekey] test mail" in text and "Message-ID:" in text and "Date:" in text
+
+
+# ---- chat webhook -------------------------------------------------------------------------
+
+HOOK = "https://chat.example.com/hooks/SECRET-TOKEN-123"
+
+
+@pytest.fixture
+async def hook_env() -> AsyncIterator[tuple[AsyncClient, Outbox, Any, list[httpx.Request]]]:
+    app = create_app(Settings(database_url=DB_URL, bootstrap_token=TOKEN, alert_webhook_url=HOOK))
+    out = Outbox()
+    app.state.alerts.sender = out
+    posts: list[httpx.Request] = []
+    status = {"code": 200}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posts.append(request)
+        return httpx.Response(status["code"])
+
+    app.state.alerts.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app.state.status = status
+    async with app.state.engine.begin() as conn:
+        if not IS_SQLITE:
+            await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        yield c, out, app, posts
+    await app.state.engine.dispose()
+
+
+def _hook_cfg(kind: str, **over: Any) -> dict[str, Any]:
+    return {"enabled": False, "events": list(alerts.EVENTS), "webhook_kind": kind, **over}
+
+
+async def test_chat_needs_the_url_in_the_environment(env) -> None:  # type: ignore[no-untyped-def]
+    c, _, _ = env  # this app has no REKEY_ALERT_WEBHOOK_URL
+    r = await c.put("/v1/sys/alerts", headers=AUTH, json=_hook_cfg("slack"))
+    assert r.status_code == 422 and "REKEY_ALERT_WEBHOOK_URL" in r.text
+    assert (await c.get("/v1/sys/alerts", headers=AUTH)).json()["webhook_url_set"] is False
+
+
+async def test_chat_url_must_be_https(tmp_path: Path) -> None:
+    app = create_app(
+        Settings(database_url=DB_URL, bootstrap_token=TOKEN, alert_webhook_url="http://x.example/h")
+    )
+    async with app.state.engine.begin() as conn:
+        if not IS_SQLITE:
+            await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.put("/v1/sys/alerts", headers=AUTH, json=_hook_cfg("slack"))
+        assert r.status_code == 422 and "https" in r.text
+    await app.state.engine.dispose()
+
+
+async def test_slack_message_is_escaped_and_the_url_is_never_shown(hook_env) -> None:  # type: ignore[no-untyped-def]
+    c, out, app, posts = hook_env
+    r = await c.put("/v1/sys/alerts", headers=AUTH, json=_hook_cfg("slack"))
+    assert r.status_code == 200 and HOOK not in r.text and r.json()["webhook_url_set"] is True
+    await _fail_rotation(app, "/K <!channel> boom")
+    assert out.sent == []  # email is off
+    assert len(posts) == 1 and str(posts[0].url) == HOOK
+    text = json.loads(posts[0].content)["text"]
+    assert "rotation failed (app/prod)" in text and "<!channel>" not in text
+    assert "&lt;!channel&gt;" in text
+
+
+async def test_discord_and_generic_payloads(hook_env) -> None:  # type: ignore[no-untyped-def]
+    c, _, app, posts = hook_env
+    await c.put("/v1/sys/alerts", headers=AUTH, json=_hook_cfg("discord"))
+    await _fail_rotation(app, "/A x")
+    d = json.loads(posts[-1].content)
+    assert d["allowed_mentions"] == {"parse": []} and "rotation failed" in d["content"]
+    await c.put("/v1/sys/alerts", headers=AUTH, json=_hook_cfg("generic"))
+    await _fail_rotation(app, "/B x")
+    g = json.loads(posts[-1].content)
+    assert g["event"] == "rotation_failed" and g["where"] == "app/prod" and g["what"] == "/B x"
+
+
+async def test_email_and_chat_both_receive_one_event(hook_env) -> None:  # type: ignore[no-untyped-def]
+    c, out, app, posts = hook_env
+    r = await c.put(
+        "/v1/sys/alerts",
+        headers=AUTH,
+        json={**GOOD, "smtp_user": "", **_hook_cfg("slack", enabled=True)},
+    )
+    assert r.status_code == 200, r.text
+    await _fail_rotation(app)
+    assert len(out.sent) == 1 and len(posts) == 1
+
+
+async def test_chat_failure_is_reported_without_the_url(hook_env) -> None:  # type: ignore[no-untyped-def]
+    c, _, app, posts = hook_env
+    await c.put("/v1/sys/alerts", headers=AUTH, json=_hook_cfg("slack"))
+    app.state.status["code"] = 500
+    r = (await c.post("/v1/sys/alerts/test", headers=AUTH)).json()
+    assert r["ok"] is False and "500" in r["error"] and "SECRET-TOKEN" not in r["error"]
+    await _fail_rotation(app, "/Z x")
+    state = (await c.get("/v1/sys/alerts", headers=AUTH)).json()
+    assert "chat:" in state["last_error"] and "SECRET-TOKEN" not in state["last_error"]
+    app.state.status["code"] = 200
+    assert (await c.post("/v1/sys/alerts/test", headers=AUTH)).json()["ok"] is True

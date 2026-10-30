@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     # Alert mail (alerts.py). Host, sender and recipients are set in the UI; only the SMTP password
     # lives here, so it is not in the database and works while the server is sealed.
     smtp_password: str = ""
+    # Chat webhook (Slack, Discord, or any URL taking JSON). The URL is a credential, so it lives
+    # here; the format is chosen in the UI.
+    alert_webhook_url: str = ""
     alert_check_minutes: int = 60  # how often the audit chain and anchors are re-checked
     alert_sealed_after_minutes: int = 5  # sealed this long (e.g. after a restart) raises an alert
     alert_repeat_hours: int = 6  # the same ongoing problem is mailed at most this often

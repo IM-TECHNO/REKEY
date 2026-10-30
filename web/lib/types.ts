@@ -224,6 +224,8 @@ export type AlertSettings = {
   events: string[];
   available_events: Record<string, string>;
   password_set: boolean;
+  webhook_kind: "off" | "slack" | "discord" | "generic";
+  webhook_url_set: boolean;
   last_sent_at: string | null;
   last_error: string;
   updated_by: string;

@@ -78,6 +78,8 @@ class AlertConfig(Base):
     mail_from: Mapped[str] = mapped_column(String(254), default="")
     recipients: Mapped[str] = mapped_column(String(2000), default="")  # comma separated
     events: Mapped[str] = mapped_column(String(300), default="")  # comma separated event names
+    # Chat webhook format (the URL itself is a secret and comes from the environment).
+    webhook_kind: Mapped[str] = mapped_column(String(8), default="off", server_default="off")
     updated_by: Mapped[str] = mapped_column(String(200), default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
