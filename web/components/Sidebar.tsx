@@ -15,6 +15,7 @@ const icons: Record<string, string> = {
   projects: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z",
   rotation: "M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5",
   dynamic: "M13 2 4 14h7l-1 8 9-12h-7l1-8Z",
+  alerts: "M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6Zm4 9a2 2 0 0 0 4 0",
   security: "M12 3 5 6v5c0 4.5 3 8.3 7 10 4-1.7 7-5.5 7-10V6l-7-3Z",
   audit: "M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01",
 };
@@ -33,6 +34,7 @@ const admin: Item[] = [
   { href: "/dynamic", label: "Dynamic secrets", icon: "dynamic", hint: "Short-lived database accounts on demand" },
   { href: "/access", label: "Access control", icon: "access", hint: "Who can do what" },
   { href: "/audit", label: "Audit log", icon: "audit", hint: "Every action, tamper-evident" },
+  { href: "/alerts", label: "Alerts", icon: "alerts", hint: "Email when something needs attention" },
   { href: "/security", label: "Security", icon: "security", hint: "Seal, rotate keys, rekey" },
 ];
 

@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     auto_unseal_namespace: str = ""  # transit: Vault Enterprise / OpenBao namespace
     auto_unseal_region: str = ""  # aws-kms: region (empty = the usual AWS environment)
 
+    # Alert mail (alerts.py). Host, sender and recipients are set in the UI; only the SMTP password
+    # lives here, so it is not in the database and works while the server is sealed.
+    smtp_password: str = ""
+    alert_check_minutes: int = 60  # how often the audit chain and anchors are re-checked
+    alert_sealed_after_minutes: int = 5  # sealed this long (e.g. after a restart) raises an alert
+    alert_repeat_hours: int = 6  # the same ongoing problem is mailed at most this often
+
     session_ttl_minutes: int = 720
     ci_session_ttl_minutes: int = 15
 

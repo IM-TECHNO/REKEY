@@ -8,6 +8,8 @@ could recompute it, so the head hash should also be shipped somewhere they canno
 
 import hashlib
 import json
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -39,6 +41,22 @@ def _digest(
         ensure_ascii=True,
     )
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+Listener = Callable[[str, str, str, str, str, str], None]
+_listeners: dict[object, Listener] = {}
+
+
+def listen(sessionmaker: object, fn: Listener) -> None:
+    """Call `fn(actor, action, outcome, project, environment, target)` after each event that
+    `record` writes with this sessionmaker. `fn` must return at once (it runs on the request path);
+    anything it raises is logged and ignored, so a listener can never block or fail an audit write.
+    """
+    _listeners[sessionmaker] = fn
+
+
+def unlisten(sessionmaker: object) -> None:
+    _listeners.pop(sessionmaker, None)
 
 
 async def record(
@@ -85,6 +103,11 @@ async def record(
             )
             try:
                 await db.commit()
+                if (fn := _listeners.get(sessionmaker)) is not None:
+                    try:
+                        fn(actor, action, outcome, project, environment, target)
+                    except Exception:  # noqa: BLE001 - never let a listener fail the audit write
+                        logging.getLogger("rekey.audit").exception("audit listener failed")
                 return
             except IntegrityError:
                 # Another writer extended the chain first; re-read the head and retry.

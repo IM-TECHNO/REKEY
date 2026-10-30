@@ -60,6 +60,28 @@ class AutoUnseal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class AlertConfig(Base):
+    """Single row: where alert mail goes and which events send it (see alerts.py).
+
+    The SMTP password is deliberately not here: it comes from the environment, so it survives a
+    root-key rotation, works while the server is sealed, and never sits in a database backup.
+    """
+
+    __tablename__ = "alert_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    smtp_host: Mapped[str] = mapped_column(String(253), default="")
+    smtp_port: Mapped[int] = mapped_column(Integer, default=587)
+    smtp_security: Mapped[str] = mapped_column(String(8), default="starttls")  # starttls|ssl|none
+    smtp_user: Mapped[str] = mapped_column(String(200), default="")
+    mail_from: Mapped[str] = mapped_column(String(254), default="")
+    recipients: Mapped[str] = mapped_column(String(2000), default="")  # comma separated
+    events: Mapped[str] = mapped_column(String(300), default="")  # comma separated event names
+    updated_by: Mapped[str] = mapped_column(String(200), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Identity(Base):
     """A person or machine that can authenticate with an API token."""
 

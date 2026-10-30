@@ -212,3 +212,19 @@ export type Insights = {
   stale: { project: string; environment: string; path: string; name: string; age_days: number }[];
   anomalies: { severity: "High" | "Medium" | "Low"; text: string; ts: string }[];
 };
+
+export type AlertSettings = {
+  enabled: boolean;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_security: "starttls" | "ssl" | "none";
+  smtp_user: string;
+  mail_from: string;
+  recipients: string[];
+  events: string[];
+  available_events: Record<string, string>;
+  password_set: boolean;
+  last_sent_at: string | null;
+  last_error: string;
+  updated_by: string;
+};

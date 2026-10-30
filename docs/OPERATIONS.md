@@ -227,6 +227,10 @@ Cloudflare.
 
 - `GET /health` for liveness. `GET /v1/sys/status` tells you if it is sealed (a sealed server after
   a restart is the most common "it's down").
+- **Alerts** (Alerts page, [ALERTS.md](ALERTS.md)) email an administrator about failed rotations,
+  changes waiting for approval, a sealed server and a failing audit check. Set it up before relying on
+  rotation: a failed rotation is otherwise only visible on its page. The SMTP password goes in `.env`
+  as `REKEY_SMTP_PASSWORD`.
 - The Insights page flags a read from a new IP, bursts of denials and failed logins.
 - The audit log is a hash chain; verify it from the Audit log page. A database administrator could
   rewrite history and recompute the chain, so Rekey can **anchor** the head hash outside the

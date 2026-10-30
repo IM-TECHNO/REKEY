@@ -6,7 +6,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from rekey import anchor, autounseal, devunseal, dynamic, rotation, service
+from rekey import alerts, anchor, audit, autounseal, devunseal, dynamic, rotation, service
 from rekey.api import router
 from rekey.auth_api import router as auth_router
 from rekey.changes import router as changes_router
@@ -40,6 +40,7 @@ def create_app(
         task: asyncio.Task[None] | None = None
         rot_task = asyncio.create_task(rotation.run_forever(app_))
         dyn_task = asyncio.create_task(dynamic.run_forever(app_))
+        alert_task = asyncio.create_task(alerts.run_forever(app_))
         if anchor.enabled(settings):
             if settings.audit_anchor_webhook:
                 anchor.check_webhook_url(settings.audit_anchor_webhook)
@@ -47,7 +48,9 @@ def create_app(
         yield
         rot_task.cancel()
         dyn_task.cancel()
-        await asyncio.gather(rot_task, dyn_task, return_exceptions=True)
+        alert_task.cancel()
+        audit.unlisten(app_.state.sessionmaker)
+        await asyncio.gather(rot_task, dyn_task, alert_task, return_exceptions=True)
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
@@ -69,6 +72,8 @@ def create_app(
     app.state.http = http
     app.state.rotation_locks = {}
     app.state.dynamic_connector = dynamic.RoutingDynamic()
+    app.state.alerts = alerts.Notifier(settings, app.state.sessionmaker)
+    audit.listen(app.state.sessionmaker, app.state.alerts.on_audit)
     app.include_router(router)
     app.include_router(auth_router)
     app.include_router(insights_router)
@@ -76,6 +81,7 @@ def create_app(
     app.include_router(rotation_router)
     app.include_router(dynamic.router)
     app.include_router(dynamic.renewals_router)
+    app.include_router(alerts.router)
 
     @app.middleware("http")
     async def no_store(request: Request, call_next):  # type: ignore[no-untyped-def]

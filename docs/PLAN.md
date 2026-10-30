@@ -26,12 +26,14 @@ Phase (open source). See [IP-RULES.md](IP-RULES.md): clean-room, nothing copied.
   role's longest life; `rekey dynamic run --renew` keeps a long job's account alive.
 - Secret scanning (`rekey scan`) for repositories and job logs.
 - Optional auto-unseal through Vault/OpenBao Transit or AWS KMS, with the shares as the fallback.
+- Email alerts (SMTP set in the UI) for failed rotations, pending approvals, a sealed server and a
+  failing audit check.
 - Docker images, compose with an nginx edge, Kubernetes manifests, operations runbook.
 
 ## Next (in rough order)
 
 1. Deployment to-do: restrict ports 80/443 on the host to Cloudflare's ranges.
-2. Alerts (email or chat) for failed rotations, pending approvals and audit-anchor mismatches.
+2. Chat alerts (Slack, Teams, a generic webhook) next to email.
 3. More auto-unseal providers (GCP KMS, Azure Key Vault).
 4. More database types for rotation and dynamic secrets, then PKI and SSH certificates, possibly via
    OpenBao behind the `SecretStore` boundary.
