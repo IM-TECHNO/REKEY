@@ -276,6 +276,5 @@ restart, unseal) after any use. Everything done with it is audited as `bootstrap
    unpinned CI bindings, and so on). Pin the GitLab `project_id` on every CI binding.
 1. An independent review of the cryptography and key handling (`server/src/rekey/crypto`), which
    includes a hand-written Shamir implementation.
-2. Try login against the real GitLab on a dev project first ([GITLAB-SETUP.md](GITLAB-SETUP.md)).
-3. A restore drill, and a rekey drill with the real share holders.
-4. Decide who the superadmins are, and keep that list to a few people.
+2. A restore drill, and a rekey drill with the real share holders.
+3. Decide who the superadmins are, and keep that list to a few people.

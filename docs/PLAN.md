@@ -24,9 +24,7 @@ Phase (open source). See [IP-RULES.md](IP-RULES.md): clean-room, nothing copied.
 
 ## Next (in rough order)
 
-1. Try the real GitLab on a dev project (needs the OAuth application and a test pipeline). Still
-   open: the required-group (`groups_direct`) check, a CI login from a real runner, and a restore drill.
-   Deployment to-do: restrict ports 80/443 on the host to Cloudflare's ranges.
+1. A restore drill. Deployment to-do: restrict ports 80/443 on the host to Cloudflare's ranges.
 2. Independent review of `server/src/rekey/crypto` and the key handling (a self-review is done:
    [SECURITY-REVIEW-2026-10.md](SECURITY-REVIEW-2026-10.md)).
 3. Auto-unseal for real deployments (a KMS or a second operator service), explicitly weighed against the model.

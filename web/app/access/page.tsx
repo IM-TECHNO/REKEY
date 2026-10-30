@@ -139,7 +139,9 @@ export default function AccessPage() {
               </tr>
             </thead>
             <tbody>
-              {(grants.data ?? []).map((g) => (
+              {[...(grants.data ?? [])]
+                .sort((a, b) => a.identity.localeCompare(b.identity) || a.project.localeCompare(b.project) || (a.environment ?? "").localeCompare(b.environment ?? ""))
+                .map((g) => (
                 <tr key={g.id} className="border-b border-border last:border-0 hover:bg-surface-2">
                   <td className={td + " font-mono"}>{g.identity}</td>
                   <td className={td}>{g.project}</td>
@@ -296,26 +298,50 @@ function GrantModal({
 }) {
   const [identity, setIdentity] = useState(identities[0]?.name ?? "");
   const [project, setProject] = useState(projects[0]?.slug ?? "");
-  const [environment, setEnvironment] = useState("");
+  // Environment slug (or ALL) -> role. One grant is created per ticked row.
+  const [picked, setPicked] = useState<Record<string, string>>({});
   const [path, setPath] = useState("/");
-  const [role, setRole] = useState("viewer");
   const [expires, setExpires] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const envs = projects.find((p) => p.slug === project)?.environments ?? [];
+  const ALL = "*";
+  const all = ALL in picked;
+  const count = Object.keys(picked).length;
+
+  function toggle(slug: string) {
+    setPicked((p) => {
+      const next = { ...p };
+      if (slug in next) delete next[slug];
+      else next[slug] = "viewer";
+      return next;
+    });
+  }
 
   async function create() {
-    try {
-      await api("POST", `/v1/identities/${encodeURIComponent(identity)}/grants`, {
-        project,
-        environment: environment || null,
-        path,
-        role,
-        expires_at: expires ? new Date(expires).toISOString() : null,
-      });
-      onDone();
-    } catch (e) {
-      setErr(errorText(e));
+    setBusy(true);
+    setErr(null);
+    const left = { ...picked };
+    const failed: string[] = [];
+    for (const [slug, role] of Object.entries(picked)) {
+      try {
+        await api("POST", `/v1/identities/${encodeURIComponent(identity)}/grants`, {
+          project,
+          environment: slug === ALL ? null : slug,
+          path,
+          role,
+          expires_at: expires ? new Date(expires).toISOString() : null,
+        });
+        delete left[slug];
+      } catch (e) {
+        failed.push(`${slug === ALL ? "all environments" : slug}: ${errorText(e)}`);
+      }
     }
+    setBusy(false);
+    if (failed.length === 0) return onDone();
+    // Keep only what did not go through, so a retry cannot create the others twice.
+    setPicked(left);
+    setErr(failed.join("; "));
   }
 
   return (
@@ -328,36 +354,50 @@ function GrantModal({
         </Field>
         <div className="grid grid-cols-2 gap-4">
           <Field label="Project">
-            <select value={project} onChange={(e) => { setProject(e.target.value); setEnvironment(""); }} className={inputCls}>
+            <select value={project} onChange={(e) => { setProject(e.target.value); setPicked({}); }} className={inputCls}>
               {projects.map((p) => <option key={p.slug} value={p.slug}>{p.name}</option>)}
-            </select>
-          </Field>
-          <Field label="Environment">
-            <select value={environment} onChange={(e) => setEnvironment(e.target.value)} className={inputCls}>
-              <option value="">All environments</option>
-              {envs.map((e) => <option key={e.slug} value={e.slug}>{e.name}</option>)}
-            </select>
-          </Field>
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="Role" hint="viewer: read · editor: + write · admin: + delete">
-            <select value={role} onChange={(e) => setRole(e.target.value)} className={inputCls}>
-              <option>viewer</option>
-              <option>editor</option>
-              <option>admin</option>
             </select>
           </Field>
           <Field label="Path prefix">
             <input value={path} onChange={(e) => setPath(e.target.value)} className={inputCls + " font-mono"} />
           </Field>
         </div>
+        <Field label="Environments and roles" hint="Tick every environment they need and pick a role for each. viewer: read · editor: + write · admin: + delete">
+          <div className="border border-border divide-y divide-border">
+            {[{ slug: ALL, name: "All environments (including future ones)" }, ...envs].map((e) => {
+              const on = e.slug in picked;
+              const blocked = all && e.slug !== ALL; // "all" already covers every environment
+              return (
+                <div key={e.slug} className={`flex items-center gap-3 px-3 py-2 text-sm ${blocked ? "opacity-40" : ""}`}>
+                  <label className="flex flex-1 items-center gap-2">
+                    <input type="checkbox" checked={on} disabled={blocked} onChange={() => toggle(e.slug)} />
+                    {e.name}
+                  </label>
+                  <select
+                    value={picked[e.slug] ?? "viewer"}
+                    disabled={!on}
+                    onChange={(ev) => setPicked((p) => ({ ...p, [e.slug]: ev.target.value }))}
+                    className={inputCls + " !w-auto"}
+                    aria-label={`Role for ${e.name}`}
+                  >
+                    <option>viewer</option>
+                    <option>editor</option>
+                    <option>admin</option>
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+        </Field>
         <Field label="Expires (optional)" hint="Leave empty for no expiry. Time-limited access is safer for prod.">
           <input type="datetime-local" value={expires} onChange={(e) => setExpires(e.target.value)} className={inputCls} />
         </Field>
         <ErrorBanner message={err} />
         <div className="flex justify-end gap-2">
           <button className={btnCls} onClick={onClose}>Cancel</button>
-          <button className={primaryCls} disabled={!identity || !project || !path.startsWith("/")} onClick={create}>Grant</button>
+          <button className={primaryCls} disabled={busy || !identity || !project || count === 0 || !path.startsWith("/")} onClick={create}>
+            {count > 1 ? `Grant ${count}` : "Grant"}
+          </button>
         </div>
       </div>
     </Modal>

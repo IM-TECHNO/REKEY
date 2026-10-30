@@ -1,7 +1,7 @@
 # Connecting Rekey to GitLab
 
-Tested so far against a stand-in GitLab only (`server/tests/fake_idp.py`, `scripts/e2e_local.py`).
-Check the points marked **verify** against the real GitLab before relying on this.
+Tested against a real GitLab, and against a stand-in one for the automated tests
+(`server/tests/fake_idp.py`, `scripts/e2e_local.py`).
 
 ## 0. How the pieces are reached
 
@@ -33,8 +33,9 @@ REKEY_UI_URL=https://<rekey ui host>/     # where the browser lands after web lo
 ```
 
 - The issuer must be `https` (loopback is allowed for local testing only).
-- **verify:** GitLab returns group membership in the ID token as `groups_direct` (Rekey also reads
-  `groups`). If the required-group check rejects everyone, inspect a real ID token's claims.
+- GitLab returns group membership in the ID token as `groups_direct` (Rekey also reads `groups`).
+  Use the group's full path. If the required-group check rejects everyone, inspect a real ID token's
+  claims.
 - A new GitLab user can log in but can do nothing until a superadmin grants access.
 - **Superadmins** are matched by GitLab **numeric user id** (the OIDC `sub`), never by username, since
   a username can be renamed or re-registered. Log in once, then read your id from `GET /v1/auth/whoami`

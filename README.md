@@ -5,9 +5,7 @@ protected environments, key rotation, a tamper-evident audit log and usage insig
 feature gates. Self-hosted, Apache-2.0.
 
 > **Status: working, not yet reviewed.** Everything below is built and tested, but the cryptography
-> has had no external review. Sign-in with GitLab (including the required-group check) has been
-> tried against a real GitLab instance; GitLab CI logins from a real runner have not yet. Use it for
-> development and staging first. See [docs/OPERATIONS.md](docs/OPERATIONS.md) ("Before production").
+> has had no external review. Use it for development and staging first. See [docs/OPERATIONS.md](docs/OPERATIONS.md) ("Before production").
 
 ## What it does
 
