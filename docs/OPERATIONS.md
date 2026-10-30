@@ -1,7 +1,6 @@
 # Operating Rekey
 
-Read this before putting any real secret in it. Rekey has had no external security review yet;
-see "Before production" at the end.
+Read this before putting any real secret in it; see "Before production" at the end.
 
 ## The model in one minute
 
@@ -275,7 +274,5 @@ restart, unseal) after any use. Everything done with it is audited as `bootstrap
 0. Read [SECURITY-REVIEW-2026-10.md](SECURITY-REVIEW-2026-10.md): a self-review with nine fixed
    findings and eleven accepted limits (keys live in Python memory, metadata is not encrypted,
    unpinned CI bindings, and so on). Pin the GitLab `project_id` on every CI binding.
-1. An independent review of the cryptography and key handling (`server/src/rekey/crypto`), which
-   includes a hand-written Shamir implementation.
-2. A restore drill, and a rekey drill with the real share holders.
-3. Decide who the superadmins are, and keep that list to a few people.
+1. A restore drill, and a rekey drill with the real share holders.
+2. Decide who the superadmins are, and keep that list to a few people.

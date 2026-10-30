@@ -4,8 +4,9 @@ Open-source secrets management for small teams. Per-environment access control, 
 protected environments, key rotation, a tamper-evident audit log and usage insights, with no paid
 feature gates. Self-hosted, Apache-2.0.
 
-> **Status: working, not yet reviewed.** Everything below is built and tested, but the cryptography
-> has had no external review. Use it for development and staging first. See [docs/OPERATIONS.md](docs/OPERATIONS.md) ("Before production").
+> **Status: working.** Everything below is built and tested. A self-review of the cryptography and
+> key handling is in [docs/SECURITY-REVIEW-2026-10.md](docs/SECURITY-REVIEW-2026-10.md). Read
+> [docs/OPERATIONS.md](docs/OPERATIONS.md) ("Before production") before storing real secrets.
 
 ## What it does
 

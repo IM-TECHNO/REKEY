@@ -2,8 +2,8 @@
 
 **Read this first: this is a self-review.** It was done by the same assistant that wrote the code,
 so it shares that author's blind spots. It is a serious pass, backed by tests that were seen to
-fail before each fix, but it is **not** the independent review the project still needs before any
-real secret goes in. See "What an independent reviewer should look at".
+fail before each fix, but it is not an independent review. See "What an independent reviewer should
+look at" if you want to review it yourself.
 
 Scope: the cryptographic core and key handling (`server/src/rekey/crypto`, key operations in
 `service.py`, the seal endpoints), then sign-in, sessions, tokens, proxy trust, the audit log, the
