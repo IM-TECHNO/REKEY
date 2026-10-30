@@ -24,7 +24,8 @@ feature gates. Self-hosted, Apache-2.0.
   secret version, optionally with two alternating accounts so nothing breaks. For API keys of other
   services, a signed webhook asks your own small service for a new key on a schedule.
 - **Dynamic secrets**: a short-lived database account for each request (Postgres or MySQL), created on
-  demand, never stored, and removed when its time is up. See [docs/DYNAMIC-SECRETS.md](docs/DYNAMIC-SECRETS.md).
+  demand, never stored, and removed when its time is up. Long jobs can renew their account, optionally
+  with a second person's approval. See [docs/DYNAMIC-SECRETS.md](docs/DYNAMIC-SECRETS.md).
 - **Secret scanning**: `rekey scan` fails a pipeline if the value of any of your secrets shows up in a
   repository or a job log. See [docs/SCANNING.md](docs/SCANNING.md).
 - **Auto-unseal (optional)**: unseal after a restart through Vault/OpenBao Transit or AWS KMS instead of

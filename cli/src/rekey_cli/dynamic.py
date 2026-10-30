@@ -1,6 +1,9 @@
 """Dynamic database accounts: ask for one, use it, let it expire (or revoke it)."""
 
 import json
+import threading
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -21,6 +24,75 @@ def revoke(api: Api, base: str, role: str, lease_id: str) -> None:
     api.request(
         "DELETE", f"{base}/dynamic/{quote(role, safe='')}/leases/{quote(lease_id, safe='')}"
     )
+
+
+def renew(
+    api: Api, base: str, role: str, lease_id: str, ttl_minutes: int | None, note: str = ""
+) -> dict[str, Any]:
+    """Extend an account. Answers {"status": "renewed", ...} or {"status": "open", "request_id"}."""
+    body: dict[str, Any] = {"note": note} if note else {}
+    if ttl_minutes:
+        body["ttl_minutes"] = ttl_minutes
+    out: dict[str, Any] = api.json(
+        "POST",
+        f"{base}/dynamic/{quote(role, safe='')}/leases/{quote(lease_id, safe='')}/renew",
+        json=body,
+    )
+    return out
+
+
+def parse_time(value: str) -> datetime:
+    when = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return when if when.tzinfo else when.replace(tzinfo=UTC)
+
+
+def lease_expiry(api: Api, base: str, role: str, lease_id: str) -> datetime | None:
+    """When the account now ends, or None if it is gone."""
+    rows = api.json("GET", f"{base}/dynamic/{quote(role, safe='')}/leases")
+    for row in rows:
+        if row["id"] == lease_id:
+            return parse_time(str(row["expires_at"]))
+    return None
+
+
+def keep_alive(  # noqa: PLR0913
+    api: Api,
+    base: str,
+    role: str,
+    lease_id: str,
+    ttl_minutes: int | None,
+    stop: threading.Event,
+    say: Callable[[str], None],
+    *,
+    margin_seconds: float,
+    poll_seconds: float = 15.0,
+    now: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> None:
+    """Renew the account whenever it is close to ending, until `stop` is set.
+
+    It looks at the real expiry each round, so an approval that arrives later is noticed. It gives
+    up (once, with a message) when the server says renewal is off or the longest life is reached.
+    """
+    waiting = False
+    while not stop.wait(poll_seconds):
+        try:
+            expiry = lease_expiry(api, base, role, lease_id)
+            if expiry is None:
+                say("the account is gone; nothing left to renew")
+                return
+            if (expiry - now()).total_seconds() > margin_seconds:
+                waiting = False
+                continue
+            if waiting:
+                continue
+            out = renew(api, base, role, lease_id, ttl_minutes)
+            waiting = out.get("status") == "open"
+            if waiting:
+                say(f"renewal needs approval (request {out['request_id']}); still waiting")
+        except CliError as exc:
+            say(f"could not renew the account: {exc}")
+            if str(exc)[:3] in {"403", "404", "409", "422"}:  # a rule, not a hiccup: stop asking
+                return
 
 
 def child_env(c: dict[str, Any]) -> dict[str, str]:

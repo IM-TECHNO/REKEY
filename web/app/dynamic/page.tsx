@@ -3,7 +3,7 @@
 import { Fragment, useState } from "react";
 import { api, errorText, useFetch } from "@/lib/api";
 import { useSession } from "@/lib/session";
-import type { DynamicCreds, DynamicRoleInfo, LeaseInfo } from "@/lib/types";
+import type { DynamicCreds, DynamicRoleInfo, LeaseInfo, LeaseRenewalInfo } from "@/lib/types";
 import {
   AdminOnly,
   ErrorBanner,
@@ -32,6 +32,7 @@ export default function DynamicPage() {
   const env = envSlug || project?.environments[0]?.slug || "";
   const base = project && env ? `/v1/projects/${project.slug}/envs/${env}/dynamic` : null;
   const list = useFetch<DynamicRoleInfo[]>(admin ? base : null);
+  const waiting = useFetch<LeaseRenewalInfo[]>(admin ? "/v1/lease-renewals" : null);
   const [modal, setModal] = useState(false);
   const [creds, setCreds] = useState<DynamicRoleInfo | null>(null);
   const [open, setOpen] = useState<string | null>(null);
@@ -45,6 +46,7 @@ export default function DynamicPage() {
       setError(errorText(e));
     } finally {
       list.reload();
+      waiting.reload();
     }
   }
 
@@ -76,6 +78,48 @@ export default function DynamicPage() {
           <ErrorBanner message={error ?? list.error} />
         </div>
 
+        {(waiting.data ?? []).length > 0 && (
+          <div className="mt-4 border border-warn/40 bg-surface">
+            <h2 className="px-4 pt-3 text-sm font-medium">Waiting for approval</h2>
+            <table className="w-full text-sm">
+              <tbody>
+                {(waiting.data ?? []).map((w) => (
+                  <tr key={w.id} className="border-t border-border">
+                    <td className={td + " font-mono"}>
+                      {w.project}/{w.environment} - {w.role}
+                      <div className="text-xs text-muted">{w.username}</div>
+                    </td>
+                    <td className={td + " text-muted"}>
+                      {w.author} wants {minutes(w.ttl_minutes)} more
+                      {w.note && <div className="text-xs">&ldquo;{w.note}&rdquo;</div>}
+                    </td>
+                    <td className={td + " text-right text-xs whitespace-nowrap space-x-3"}>
+                      {w.can_decide ? (
+                        <>
+                          <button
+                            className="text-accent hover:underline"
+                            onClick={() => act(() => api("POST", `/v1/lease-renewals/${w.id}/approve`, {}))}
+                          >
+                            Approve
+                          </button>
+                          <button
+                            className="text-muted hover:text-danger"
+                            onClick={() => act(() => api("POST", `/v1/lease-renewals/${w.id}/reject`, {}))}
+                          >
+                            Reject
+                          </button>
+                        </>
+                      ) : (
+                        <span className="text-muted">{w.is_author ? "your request" : ""}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         <div className="mt-4 border border-border bg-surface overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -103,6 +147,16 @@ export default function DynamicPage() {
                     </td>
                     <td className={td + " text-muted whitespace-nowrap"}>
                       {minutes(r.default_ttl_minutes)} (max {minutes(r.max_ttl_minutes)})
+                      <select
+                        aria-label={`Renewal for ${r.name}`}
+                        value={r.renewal}
+                        onChange={(e) => act(() => api("PATCH", `${base}/${r.name}`, { renewal: e.target.value }))}
+                        className={inputCls + " mt-1 block text-xs"}
+                      >
+                        <option value="off">cannot be renewed</option>
+                        <option value="self">renewable by its owner</option>
+                        <option value="approval">renewal needs approval</option>
+                      </select>
                     </td>
                     <td className={td}>
                       <button
@@ -141,7 +195,14 @@ export default function DynamicPage() {
                   {open === r.id && (
                     <tr className="border-b border-border bg-background">
                       <td colSpan={5} className="px-4 py-3">
-                        <Leases base={`${base}/${r.name}`} onChange={list.reload} />
+                        <Leases
+                          base={`${base}/${r.name}`}
+                          renewal={r.renewal}
+                          onChange={() => {
+                            list.reload();
+                            waiting.reload();
+                          }}
+                        />
                       </td>
                     </tr>
                   )}
@@ -182,9 +243,35 @@ export default function DynamicPage() {
   );
 }
 
-function Leases({ base, onChange }: { base: string; onChange: () => void }) {
+function Leases({
+  base,
+  renewal,
+  onChange,
+}: {
+  base: string;
+  renewal: DynamicRoleInfo["renewal"];
+  onChange: () => void;
+}) {
   const leases = useFetch<LeaseInfo[]>(`${base}/leases`);
   const [err, setErr] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  async function renew(id: string) {
+    setErr(null);
+    setInfo(null);
+    try {
+      const out = await api<{ status: string; expires_at: string }>("POST", `${base}/leases/${id}/renew`, {});
+      setInfo(
+        out.status === "renewed"
+          ? `Extended until ${new Date(out.expires_at).toLocaleString()}.`
+          : "Renewal requested. It is extended when someone else approves it.",
+      );
+    } catch (e) {
+      setErr(errorText(e));
+    } finally {
+      leases.reload();
+      onChange();
+    }
+  }
   async function revoke(id: string) {
     setErr(null);
     try {
@@ -200,6 +287,7 @@ function Leases({ base, onChange }: { base: string; onChange: () => void }) {
   return (
     <div className="text-sm">
       <ErrorBanner message={err ?? leases.error} />
+      {info && <p className="mb-2 text-xs text-muted">{info}</p>}
       {rows.length === 0 ? (
         <p className="text-muted">No live accounts.</p>
       ) : (
@@ -211,7 +299,12 @@ function Leases({ base, onChange }: { base: string; onChange: () => void }) {
                 <td className="py-1 pr-4 text-muted">asked by {l.identity}</td>
                 <td className="py-1 pr-4 text-muted">expires {new Date(l.expires_at).toLocaleString()}</td>
                 <td className="py-1 pr-4 text-xs text-danger">{l.error}</td>
-                <td className="py-1 text-right text-xs">
+                <td className="py-1 text-right text-xs space-x-3">
+                  {renewal !== "off" && (
+                    <button className="text-accent hover:underline" onClick={() => renew(l.id)}>
+                      Renew
+                    </button>
+                  )}
                   <button
                     className="text-muted hover:text-danger"
                     onClick={() => confirm(`Remove ${l.username} from the database now?`) && revoke(l.id)}
@@ -307,6 +400,7 @@ function RoleModal({ base, onClose, onDone }: { base: string; onClose: () => voi
     default_ttl_minutes: "60",
     max_ttl_minutes: "1440",
     max_active: "20",
+    renewal: "off",
   });
   const [err, setErr] = useState<string | null>(null);
   const mysql = f.kind === "mysql";
@@ -347,6 +441,7 @@ function RoleModal({ base, onClose, onDone }: { base: string; onClose: () => voi
         default_ttl_minutes: Number(f.default_ttl_minutes),
         max_ttl_minutes: Number(f.max_ttl_minutes),
         max_active: Number(f.max_active),
+        renewal: f.renewal,
       });
       onDone();
     } catch (e) {
@@ -420,6 +515,16 @@ function RoleModal({ base, onClose, onDone }: { base: string; onClose: () => voi
             <input value={f.max_active} onChange={set("max_active")} className={inputCls} inputMode="numeric" />
           </Field>
         </div>
+        <Field
+          label="Renewal"
+          hint="Whether a live account can be extended. It never lives longer than the longest life above, counted from when it was made."
+        >
+          <select value={f.renewal} onChange={set("renewal")} className={inputCls}>
+            <option value="off">Cannot be renewed</option>
+            <option value="self">The person who asked can renew it</option>
+            <option value="approval">Renewing needs someone else to approve</option>
+          </select>
+        </Field>
         <ErrorBanner message={err} />
         <div className="flex justify-end gap-2">
           <button className={btnCls} onClick={onClose}>Cancel</button>

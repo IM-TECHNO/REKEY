@@ -3,7 +3,9 @@ import json
 import os
 import subprocess  # noqa: S404 (running the user's own command is the point of `run`)
 import sys
+import threading
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -300,6 +302,10 @@ def dynamic_run(
     project: Project = "",
     env: EnvOpt = "",
     ttl: Ttl = None,
+    renew: Annotated[
+        bool,
+        typer.Option("--renew", help="Keep extending the account while COMMAND runs (if allowed)."),
+    ] = False,
 ) -> None:
     """Run COMMAND with a fresh account in its environment, then remove the account.
 
@@ -314,11 +320,34 @@ def dynamic_run(
     creds = dynamic_mod.request_creds(api, base, role, ttl)
     child = {k: v for k, v in os.environ.items() if k not in ("REKEY_TOKEN", "REKEY_JWT")}
     child.update(dynamic_mod.child_env(creds))
+    stop = threading.Event()
+    if renew:
+        life = (
+            dynamic_mod.parse_time(str(creds["expires_at"])) - datetime.now(UTC)
+        ).total_seconds()
+        threading.Thread(
+            target=dynamic_mod.keep_alive,
+            args=(
+                api,
+                base,
+                role,
+                creds["lease_id"],
+                ttl,
+                stop,
+                lambda m: typer.echo(f"rekey: {m}", err=True),
+            ),
+            kwargs={
+                "margin_seconds": max(5.0, life / 4),
+                "poll_seconds": max(1.0, min(15.0, life / 8)),
+            },
+            daemon=True,
+        ).start()
     try:
         result = subprocess.run(command, env=child, check=False)  # noqa: S603
     except FileNotFoundError as exc:
         raise CliError(f"command not found: {command[0]}") from exc
     finally:
+        stop.set()
         try:  # the account is useless once the command is done: take it away now
             dynamic_mod.revoke(api, base, role, creds["lease_id"])
         except CliError as exc:
@@ -339,6 +368,72 @@ def dynamic_revoke(
 ) -> None:
     """Remove an account before it expires."""
     dynamic_mod.revoke(_client(), _base(project, env), role, lease_id)
+
+
+@dynamic_app.command("renew")
+@_guard
+def dynamic_renew(
+    role: Role,
+    lease_id: Annotated[str, typer.Argument(help="Lease id printed by `creds`.")],
+    project: Project = "",
+    env: EnvOpt = "",
+    ttl: Ttl = None,
+    note: Annotated[str, typer.Option(help="Why, for the person approving.")] = "",
+) -> None:
+    """Extend an account (or ask for it to be extended, if the role needs approval)."""
+    out = dynamic_mod.renew(_client(), _base(project, env), role, lease_id, ttl, note)
+    if out["status"] == "renewed":
+        typer.echo(f"rekey: account now expires {out['expires_at']}")
+    else:
+        typer.echo(f"rekey: waiting for approval, request {out['request_id']}")
+
+
+@dynamic_app.command("renewals")
+@_guard
+def dynamic_renewals(
+    all_: Annotated[bool, typer.Option("--all", help="Include decided requests.")] = False,
+) -> None:
+    """List renewal requests you can see (your own, and ones you can decide)."""
+    rows = _client().json("GET", "/v1/lease-renewals", params={"status": "all" if all_ else "open"})
+    if not rows:
+        typer.echo("No renewal requests.")
+    for r in rows:
+        flag = "decide?" if r["can_decide"] else ("yours" if r["is_author"] else "")
+        typer.echo(
+            f"{r['id']}	{r['status']}	{r['project']}/{r['environment']}	{r['role']} "
+            f"{r['username']}	+{r['ttl_minutes']}m	by {r['author']}	{flag}"
+        )
+
+
+def _decide_renewal(renewal_id: str, verb: str, note: str) -> None:
+    out = _client().json("POST", f"/v1/lease-renewals/{renewal_id}/{verb}", json={"note": note})
+    until = f" (account now expires {out['expires_at']})" if out.get("expires_at") else ""
+    typer.echo(f"{renewal_id}: {out['status']}{until}")
+
+
+@dynamic_app.command("approve")
+@_guard
+def dynamic_approve(
+    renewal_id: str, note: Annotated[str, typer.Option(help="Optional comment.")] = ""
+) -> None:
+    """Approve a renewal request. You cannot approve your own."""
+    _decide_renewal(renewal_id, "approve", note)
+
+
+@dynamic_app.command("reject")
+@_guard
+def dynamic_reject(
+    renewal_id: str, note: Annotated[str, typer.Option(help="Why it was rejected.")] = ""
+) -> None:
+    """Reject a renewal request."""
+    _decide_renewal(renewal_id, "reject", note)
+
+
+@dynamic_app.command("cancel")
+@_guard
+def dynamic_cancel(renewal_id: str) -> None:
+    """Withdraw a renewal request you made."""
+    _decide_renewal(renewal_id, "cancel", "")
 
 
 @dynamic_app.command("leases")

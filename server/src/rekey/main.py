@@ -75,6 +75,7 @@ def create_app(
     app.include_router(changes_router)
     app.include_router(rotation_router)
     app.include_router(dynamic.router)
+    app.include_router(dynamic.renewals_router)
 
     @app.middleware("http")
     async def no_store(request: Request, call_next):  # type: ignore[no-untyped-def]

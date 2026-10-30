@@ -334,6 +334,8 @@ class DynamicRole(Base):
     max_ttl_minutes: Mapped[int] = mapped_column(Integer, default=1440)
     max_active: Mapped[int] = mapped_column(Integer, default=20)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Can a live account be extended? off | self (its owner may) | approval (someone else decides)
+    renewal: Mapped[str] = mapped_column(String(8), default="off", server_default="off")
     created_by: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
@@ -353,3 +355,25 @@ class Lease(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     __table_args__ = (Index("ix_dynamic_lease_due", "revoked_at", "expires_at"),)
+
+
+class LeaseRenewal(Base):
+    """A request to extend a live account, waiting for someone other than the asker to decide."""
+
+    __tablename__ = "dynamic_renewal"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_id)
+    lease_id: Mapped[str] = mapped_column(ForeignKey("dynamic_lease.id", ondelete="CASCADE"))
+    author: Mapped[str] = mapped_column(String(200))
+    author_identity_id: Mapped[str | None] = mapped_column(String(36), default=None)
+    ttl_minutes: Mapped[int] = mapped_column(Integer)
+    note: Mapped[str] = mapped_column(String(500), default="")
+    # open -> applying -> approved, or rejected / cancelled / expired. `applying` is a short claim
+    # so two approvers cannot extend the same account twice.
+    status: Mapped[str] = mapped_column(String(10), default="open")
+    decided_by: Mapped[str | None] = mapped_column(String(200), default=None)
+    decision_note: Mapped[str] = mapped_column(String(500), default="")
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (Index("ix_dynamic_renewal_status", "status", "lease_id"),)

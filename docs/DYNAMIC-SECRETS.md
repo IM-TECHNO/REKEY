@@ -81,6 +81,42 @@ rekey dynamic revoke -p app -e prod readonly <lease-id>
 as it ends. In GitLab CI the pipeline logs in with its ID token as usual (see
 [GITLAB-SETUP.md](GITLAB-SETUP.md)) and calls `rekey dynamic run`.
 
+## Renewing an account
+
+A job that runs longer than its account would fail halfway. Instead of asking for a very long life up
+front, a role can allow renewal. Its **renewal** setting is one of:
+
+- `off` (the default): an account lives for the time it was given, then it is removed.
+- `self`: the person (or pipeline) that asked can extend its own account.
+- `approval`: the request waits until someone else approves it, the same idea as approvals for protected
+  environments. A superadmin's own renewals apply directly (and are audited).
+
+Whatever the setting, an account can **never live longer than the role's longest life
+(`max_ttl_minutes`) counted from when it was created**. Renewing moves the end to "now plus the time you
+ask for" but stops at that ceiling, so a stolen or forgotten account cannot be kept alive forever.
+After the ceiling, ask for a new account.
+
+```bash
+rekey dynamic renew -p app -e prod readonly <lease-id> --ttl 60 --note "long migration"
+rekey dynamic run   -p app -e prod --renew readonly -- ./nightly-import.sh   # renews while it runs
+rekey dynamic renewals                    # requests you made, or can decide
+rekey dynamic approve <request-id>        # you cannot approve your own
+rekey dynamic reject  <request-id> --note "use the batch role instead"
+rekey dynamic cancel  <request-id>        # withdraw yours
+```
+
+`dynamic run --renew` checks the account every few seconds and asks for more time shortly before it ends.
+With `approval` it asks once, says so on stderr, and carries on checking, so an approval that arrives
+while the command runs is picked up. It stops asking, with a message, when renewal is off or the ceiling
+is reached. The UI has the same on the **Dynamic secrets** page: a Renew button next to each account and a
+"Waiting for approval" box.
+
+Who decides: a superadmin, or someone holding the `admin` role on that environment. Nobody decides their
+own request. If the account is revoked or expires while a request is waiting, the request is closed as
+expired. On PostgreSQL the database's own `VALID UNTIL` moves with the renewal; MySQL has no such setting,
+so there Rekey's clean-up task is the only timer. Audit actions: `dynamic.renew`, `dynamic.renew-request`,
+`dynamic.renew-approve`, `dynamic.renew-reject`, `dynamic.renew-cancel`.
+
 ## Rules and limits
 
 - **Who may ask:** anyone with at least `viewer` on the environment (the same bar as reading a secret).
@@ -94,7 +130,8 @@ as it ends. In GitLab CI the pipeline logs in with its ID token as usual (see
 - **Don't let these accounts own things.** An account that creates tables owns them, and the database
   will refuse to drop it. Give the rights through the role and use a normal, long-lived owner account
   for schema changes.
-- **No renewal yet:** ask again for a new account when the old one expires.
+- **Renewal is off unless you turn it on** per role (see above); then ask again for a new account once
+  the ceiling is reached.
 - **MySQL** uses `information_schema.processlist` to end open sessions; MySQL has marked it deprecated
   in favour of `performance_schema.processlist`, but both need the same privilege.
 - Tested against real PostgreSQL 17 and MySQL 8 servers.

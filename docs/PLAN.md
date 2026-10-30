@@ -22,6 +22,8 @@ Phase (open source). See [IP-RULES.md](IP-RULES.md): clean-room, nothing copied.
 - Audit anchoring: the chain's head hash is copied to a file and/or webhook and checked on verify.
 - Dynamic secrets: short-lived Postgres/MySQL accounts per request, removed on expiry, with a CLI
   (`rekey dynamic run`) and a UI page.
+- Renewal of dynamic accounts (off, by the owner, or with a second person's approval), capped at the
+  role's longest life; `rekey dynamic run --renew` keeps a long job's account alive.
 - Secret scanning (`rekey scan`) for repositories and job logs.
 - Optional auto-unseal through Vault/OpenBao Transit or AWS KMS, with the shares as the fallback.
 - Docker images, compose with an nginx edge, Kubernetes manifests, operations runbook.
@@ -30,7 +32,7 @@ Phase (open source). See [IP-RULES.md](IP-RULES.md): clean-room, nothing copied.
 
 1. Deployment to-do: restrict ports 80/443 on the host to Cloudflare's ranges.
 2. Alerts (email or chat) for failed rotations, pending approvals and audit-anchor mismatches.
-3. More auto-unseal providers (GCP KMS, Azure Key Vault) and lease renewal for dynamic secrets.
+3. More auto-unseal providers (GCP KMS, Azure Key Vault).
 4. More database types for rotation and dynamic secrets, then PKI and SSH certificates, possibly via
    OpenBao behind the `SecretStore` boundary.
 5. Kubernetes operator / External Secrets provider.

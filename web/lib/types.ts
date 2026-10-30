@@ -92,7 +92,26 @@ export type DynamicRoleInfo = {
   max_ttl_minutes: number;
   max_active: number;
   enabled: boolean;
+  renewal: "off" | "self" | "approval";
   active_leases: number;
+};
+
+export type LeaseRenewalInfo = {
+  id: string;
+  project: string;
+  environment: string;
+  role: string;
+  lease_id: string;
+  username: string;
+  lease_expires_at: string;
+  author: string;
+  ttl_minutes: number;
+  note: string;
+  status: "open" | "approved" | "rejected" | "cancelled" | "expired";
+  created_at: string;
+  decided_by: string | null;
+  can_decide: boolean;
+  is_author: boolean;
 };
 
 export type LeaseInfo = {
