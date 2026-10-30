@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+import typer.main
 
 from rekey_cli import api as api_mod
 from rekey_cli import config, envfile, login
@@ -93,20 +94,54 @@ def _base(project: str, env: str) -> str:
     )
 
 
+@app.command("help")
+def help_cmd(
+    command: Annotated[
+        list[str] | None, typer.Argument(help="Command to describe, e.g. `dynamic run`.")
+    ] = None,
+) -> None:
+    """Show help for rekey, or for one command: rekey help import."""
+    # Same text as `rekey <command> --help`; an unknown command is a usage error.
+    typer.main.get_command(app).main(
+        args=[*(command or []), "--help"], prog_name="rekey", standalone_mode=True
+    )
+
+
+def _headless() -> bool:
+    """No usable browser on this machine: an SSH session, or Linux with no desktop (where Python
+    would otherwise start a text-mode browser that cannot finish the sign-in)."""
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        return True
+    return sys.platform.startswith("linux") and not (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    )
+
+
 @app.command("login")
 @_guard
 def login_cmd(
     server: Annotated[
         str, typer.Option(help="Rekey server URL, e.g. https://rekey.example.com")
     ] = "",
+    no_browser: Annotated[
+        bool,
+        typer.Option(
+            "--no-browser",
+            help="Print a link to open on any device, then paste the code it shows. "
+            "Used automatically over SSH or without a desktop.",
+        ),
+    ] = False,
 ) -> None:
-    """Sign in with GitLab in your browser."""
+    """Sign in with GitLab (over SSH: open a link elsewhere and paste the code)."""
     cfg = config.load()
     url = api_mod.normalise_server(server or os.environ.get("REKEY_SERVER") or cfg.server or "")
     if not url or url == "https://":
         raise CliError("pass --server https://...")
+    paste = None
+    if no_browser or _headless():
+        paste = lambda: typer.prompt("Paste the code shown after signing in")  # noqa: E731
     result = login.login(
-        Api(url, "", api_mod.make_http()), announce=lambda m: typer.echo(m, err=True)
+        Api(url, "", api_mod.make_http()), announce=lambda m: typer.echo(m, err=True), paste=paste
     )
     config.save(config.Config(server=url, token=result["token"], expires_at=result["expires_at"]))
     typer.echo(f"Signed in as {result['identity']} (session until {result['expires_at']})")

@@ -405,6 +405,54 @@ def test_browser_login_times_out(srv: FakeServer) -> None:
         )
 
 
+def test_paste_login_prints_a_portless_link_and_exchanges_the_pasted_code(
+    srv: FakeServer,
+) -> None:
+    said: list[str] = []
+
+    def announce(m: str) -> None:
+        said.append(m)
+        q = parse_qs(urlparse(m.split("\n  ", 1)[1]).query)
+        assert "port" not in q and q["mode"] == ["cli"]  # nothing listens on this machine
+        srv.exchange_challenge = q["challenge"][0]
+
+    result = login.login(
+        Api(SERVER, "", api_mod.make_http()),
+        open_browser=lambda url: pytest.fail("must not open a browser"),
+        announce=announce,
+        paste=lambda: "  one-time \n",
+    )
+    assert result["token"] == "rs_user" and said
+    with pytest.raises(CliError, match="401"):
+        login.login(
+            Api(SERVER, "", api_mod.make_http()),
+            announce=announce,
+            paste=lambda: "wrong-code",
+        )
+    with pytest.raises(CliError, match="no code"):
+        login.login(Api(SERVER, "", api_mod.make_http()), announce=announce, paste=lambda: " ")
+
+
+def test_login_command_chooses_paste_over_ssh_or_with_the_flag(
+    srv: FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[bool] = []
+
+    def fake_login(api: Api, **kw: object) -> dict[str, str]:
+        seen.append(kw["paste"] is not None)
+        return {"token": "t", "expires_at": "2999-01-01T00:00:00+00:00", "identity": "gitlab:a"}
+
+    monkeypatch.setattr(login, "login", fake_login)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    for var in ("SSH_CONNECTION", "SSH_TTY"):
+        monkeypatch.delenv(var, raising=False)
+    runner.invoke(app, ["login", "--server", SERVER])
+    runner.invoke(app, ["login", "--server", SERVER, "--no-browser"])
+    monkeypatch.setenv("SSH_CONNECTION", "1.2.3.4 5 6.7.8.9 22")
+    runner.invoke(app, ["login", "--server", SERVER])
+    assert seen == [False, True, True]
+
+
 def test_login_command_saves_session(srv: FakeServer, monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_login(api: Api, **_: object) -> dict[str, str]:
         return {
@@ -432,3 +480,13 @@ def test_logout_revokes_and_clears(srv: FakeServer) -> None:
 def test_version_flag_prints_the_package_version(srv: FakeServer) -> None:
     res = runner.invoke(app, ["--version"])
     assert res.exit_code == 0 and res.output.strip().count(".") >= 1
+
+
+def test_help_command_lists_commands_and_describes_one(srv: FakeServer) -> None:
+    top = runner.invoke(app, ["help"])
+    assert top.exit_code == 0 and "login" in top.output and "import" in top.output
+    one = runner.invoke(app, ["help", "import"])
+    assert one.exit_code == 0 and "--dry-run" in one.output
+    nested = runner.invoke(app, ["help", "dynamic", "run"])
+    assert nested.exit_code == 0 and "--renew" in nested.output
+    assert runner.invoke(app, ["help", "nope"]).exit_code != 0

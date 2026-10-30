@@ -54,9 +54,23 @@ def login(
     open_browser: Callable[[str], object] = webbrowser.open,
     timeout: float = 180.0,
     announce: Callable[[str], None] = print,
+    paste: Callable[[], str] | None = None,
 ) -> dict[str, str]:
-    """Run the browser flow and return the server's {token, expires_at, identity}."""
+    """Run the browser flow and return the server's {token, expires_at, identity}.
+
+    With `paste`, no browser or listener is used on this machine: the person opens the printed URL
+    anywhere, and `paste()` returns the code the server shows them afterwards."""
     verifier, challenge = _pkce()
+    if paste is not None:
+        url = f"{api.server}/v1/auth/oidc/login?" + urlencode(
+            {"mode": "cli", "challenge": challenge}
+        )
+        announce(f"Open this address in any browser and sign in with GitLab:\n  {url}")
+        code = paste().strip()
+        if not code:
+            raise CliError("no code entered")
+        resp = api.json("POST", "/v1/auth/cli/exchange", json={"code": code, "verifier": verifier})
+        return {k: str(resp[k]) for k in ("token", "expires_at", "identity")}
     listener = _Listener(("127.0.0.1", 0), _Handler)  # port 0: the OS picks a free port
     listener.timeout = 1.0
     port = listener.server_address[1]

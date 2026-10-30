@@ -63,6 +63,12 @@ rekey login --server https://<rekey host>
 rekey run -p myapp -e dev -- npm start
 ```
 
+`rekey login` normally opens a browser on the same machine. Over SSH, or on a server with no desktop,
+it instead prints a link: open it in any browser (your laptop), sign in with GitLab, and paste the
+code the page shows back into the terminal. The code works once, for 5 minutes, and is useless
+without the terminal that asked for it. `--no-browser` forces this. It needs the server to be
+updated first.
+
 `.rekey.json` in a repo can hold `{"project": "myapp", "env": "dev"}` so the flags are optional.
 
 ### Moving existing `.env` files in

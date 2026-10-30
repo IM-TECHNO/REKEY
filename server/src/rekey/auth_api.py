@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
@@ -24,6 +24,7 @@ BINDING_COOKIE = "rekey_oidc"
 BINDING_PATH = "/v1/auth/oidc"
 _STATE_TTL = timedelta(minutes=10)
 _CODE_TTL = timedelta(minutes=2)
+_PASTE_CODE_TTL = timedelta(minutes=5)  # a person copies it across, so allow a little longer
 
 
 def _provider(request: Request) -> oidc.Provider:
@@ -45,8 +46,10 @@ async def oidc_login(
     challenge: Annotated[str | None, Query(min_length=43, max_length=128)] = None,
 ) -> RedirectResponse:
     provider = _provider(request)
-    if mode == "cli" and (port is None or challenge is None):
-        raise HTTPException(422, "cli login needs port and challenge")
+    # A CLI login without a port is the paste flow for machines with no usable browser: the code is
+    # shown on a page instead of being handed to a loopback listener.
+    if mode == "cli" and challenge is None:
+        raise HTTPException(422, "cli login needs a challenge")
     # Forget abandoned logins so the table cannot grow without bound.
     await db.execute(delete(OidcState).where(OidcState.created_at < datetime.now(UTC) - _STATE_TTL))
     verifier, code_challenge = oidc.pkce_pair()
@@ -173,17 +176,24 @@ async def oidc_callback(
     await log(request, identity.name, "auth.oidc", target=pending.mode)
 
     if pending.mode == "cli":
-        assert pending.cli_challenge is not None and pending.cli_port is not None  # noqa: S101
+        assert pending.cli_challenge is not None  # noqa: S101
+        paste = pending.cli_port is None
         one_time = secrets.token_urlsafe(32)
         db.add(
             LoginCode(
                 code_hash=rbac.hash_token(one_time),
                 identity_id=identity.id,
                 cli_challenge=pending.cli_challenge,
-                expires_at=datetime.now(UTC) + _CODE_TTL,
+                expires_at=datetime.now(UTC) + (_PASTE_CODE_TTL if paste else _CODE_TTL),
             )
         )
         await db.commit()
+        if paste:
+            # Useless without the verifier only the requesting CLI holds, but still not cached.
+            return HTMLResponse(
+                _CODE_PAGE.format(code=one_time),
+                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+            )
         # Loopback only: the browser hands the one-time code to the CLI on this machine.
         target = f"http://127.0.0.1:{pending.cli_port}/callback?{urlencode({'code': one_time})}"
         return RedirectResponse(target, status_code=302)
@@ -203,6 +213,17 @@ async def oidc_callback(
     )
     response.delete_cookie(BINDING_COOKIE, path=BINDING_PATH)  # one login, one binding
     return response
+
+
+_CODE_PAGE = (
+    "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
+    "<title>Rekey sign-in code</title><body style='font-family:sans-serif;max-width:40rem;"
+    "margin:3rem auto;padding:0 1rem'><h3>Signed in with GitLab</h3>"
+    "<p>Copy this code into the terminal where you ran <code>rekey login</code>. "
+    "It works once and expires in 5 minutes.</p>"
+    "<pre style='font-size:1.1rem;padding:1rem;border:1px solid #888;overflow-wrap:anywhere;"
+    "white-space:pre-wrap'>{code}</pre>"
+)
 
 
 class CliExchange(BaseModel):

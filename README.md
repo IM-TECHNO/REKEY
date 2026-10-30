@@ -35,7 +35,8 @@ feature gates. Self-hosted, Apache-2.0.
   log no longer checks out. Set up in the UI. See [docs/ALERTS.md](docs/ALERTS.md).
 - **Audit**: every allowed and denied action, in a hash chain you can verify. Values are never logged.
 - **Insights**: reads per day, top readers, secret age, anomalies (new IP, denial bursts, failed logins).
-- **CLI**: `rekey run -p app -e dev -- npm start` injects secrets into a command's environment.
+- **CLI**: `rekey run -p app -e dev -- npm start` injects secrets into a command's environment, and
+  `rekey import .env -p app -e dev` loads an existing `.env` file. See [Install the CLI](#install-the-cli).
 
 ## Layout
 
@@ -62,6 +63,22 @@ cd web && npm install && npm run dev -- -p 3300
 
 You are `alice`, a superadmin. To act as a second person (for the approval flow), call
 `http://127.0.0.1:8771/_dev/user?sub=2002&nickname=bob`, sign out, and sign in again.
+
+## Install the CLI
+
+On Linux (x86-64 or arm64), one line downloads the release binary, checks its SHA-256 and puts `rekey`
+on your PATH (`/usr/local/bin`, or `~/.local/bin` if that is not writable):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/IM-TECHNO/REKEY/main/scripts/install.sh | sh
+rekey --version
+rekey login --server https://<your rekey host>
+```
+
+Pin a version with `REKEY_VERSION=0.1.0` or pick the folder with `REKEY_INSTALL_DIR`. Read
+[scripts/install.sh](scripts/install.sh) first if you like. On macOS, Windows or Alpine, use
+`pipx install "git+https://github.com/IM-TECHNO/REKEY.git#subdirectory=cli"`. Moving existing `.env`
+files in, and pipeline setup: [docs/GITLAB-SETUP.md](docs/GITLAB-SETUP.md).
 
 ## Run it for real
 
