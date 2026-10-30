@@ -112,6 +112,10 @@ deploy:
     - rekey run -p myapp -e staging -- ./deploy.sh
 ```
 
+To use the secrets as variables for the rest of a job (for example before a `kubectl` or `docker`
+step), load them with `eval "$(rekey export -p myapp -e staging --format shell)"`. Every value is
+single-quoted, so `$`, quotes, spaces and newlines are never interpreted by the shell.
+
 No secret is stored in GitLab: the job's token is exchanged for a 15-minute Rekey session. With
 `protected_only` the binding only works on protected branches or tags. An exact `ref` beats `*`.
 

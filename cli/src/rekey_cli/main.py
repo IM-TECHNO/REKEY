@@ -1,6 +1,7 @@
 import functools
 import json
 import os
+import shlex
 import subprocess  # noqa: S404 (running the user's own command is the point of `run`)
 import sys
 import threading
@@ -289,9 +290,14 @@ def export(
     project: Project = "",
     env: EnvOpt = "",
     path: PathOpt = "/",
-    fmt: Annotated[str, typer.Option("--format", help="dotenv or json.")] = "dotenv",
+    fmt: Annotated[str, typer.Option("--format", help="dotenv, json or shell.")] = "dotenv",
 ) -> None:
-    """Print secrets as a .env file or JSON. Prefer `run`; this writes plaintext to stdout."""
+    """Print secrets as a .env file, JSON, or `export` lines for a POSIX shell.
+
+    Prefer `run`; this writes plaintext to stdout. In a CI job, `eval "$(rekey export
+    --format shell ...)"` sets the variables for the rest of the job: every value is
+    single-quoted, so $, quotes and spaces are never interpreted by the shell.
+    """
     secrets = _fetch(project, env, path)
     if fmt == "json":
         typer.echo(json.dumps(secrets, indent=2))
@@ -299,8 +305,11 @@ def export(
         for key, value in secrets.items():
             escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
             typer.echo(f'{key}="{escaped}"')
+    elif fmt == "shell":
+        for key, value in secrets.items():  # names are checked as valid variables by the server
+            typer.echo(f"export {key}={shlex.quote(value)}")
     else:
-        raise CliError("--format must be dotenv or json")
+        raise CliError("--format must be dotenv, json or shell")
 
 
 @app.command(context_settings={"allow_interspersed_args": False})

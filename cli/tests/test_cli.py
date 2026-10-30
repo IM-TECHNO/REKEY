@@ -3,6 +3,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -297,6 +299,28 @@ def test_export_dotenv_escapes_and_json(srv: FakeServer) -> None:
     js = runner.invoke(app, ["export", "-p", "app", "-e", "dev", "--format", "json"])
     assert json.loads(js.output) == srv.export
     assert runner.invoke(app, ["export", "-p", "a", "-e", "d", "--format", "xml"]).exit_code == 1
+
+
+def test_export_shell_survives_eval_with_hostile_values(srv: FakeServer) -> None:
+    sh = shutil.which("sh")
+    if sh is None:
+        pytest.skip("no POSIX shell here")
+    srv.export = {
+        "PLAIN": "abc",
+        "DOLLAR": "pa$$word-$HOME-${USER}",
+        "QUOTES": 'it\'s "quoted" `tick` \\back',
+        "SPACES": "  lead and trail  ",
+        "MULTI": "line1\nline2",
+        "SEMI": "x; echo pwned > pwned.txt; #",
+    }
+    signed_in()
+    out = runner.invoke(app, ["export", "-p", "a", "-e", "d", "--format", "shell"]).output
+    script = out + "\n".join(f'printf "%s\\0" "${k}"' for k in srv.export)
+    res = subprocess.run(  # noqa: S603
+        [sh, "-c", script], capture_output=True, check=True, env={"HOME": "/h", "USER": "u"}
+    )
+    assert res.stdout.decode().split("\0")[:-1] == list(srv.export.values())
+    assert not Path("pwned.txt").exists()
 
 
 # ---- run ----------------------------------------------------------------------------------
