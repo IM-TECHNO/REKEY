@@ -45,12 +45,38 @@ REKEY_UI_URL=https://<rekey ui host>/     # where the browser lands after web lo
 
 ## 3. People: the CLI
 
+Install it on Linux (x86-64 or arm64) with one line. It downloads the release binary, checks its
+SHA-256 against the release's `SHA256SUMS`, and installs to `/usr/local/bin` (or `~/.local/bin` when
+that is not writable):
+
+```
+curl -fsSL https://raw.githubusercontent.com/IM-TECHNO/REKEY/main/scripts/install.sh | sh
+```
+
+Pin a version with `REKEY_VERSION=0.1.0`, choose the folder with `REKEY_INSTALL_DIR`. Read the script
+first if you prefer: it is `scripts/install.sh`. The checksum comes from the same release as the
+binary, so it catches a corrupt or swapped download, not a compromised release. Elsewhere (macOS,
+Windows, Alpine) use `pipx install "git+https://github.com/IM-TECHNO/REKEY.git#subdirectory=cli"`.
+
 ```
 rekey login --server https://<rekey host>
 rekey run -p myapp -e dev -- npm start
 ```
 
 `.rekey.json` in a repo can hold `{"project": "myapp", "env": "dev"}` so the flags are optional.
+
+### Moving existing `.env` files in
+
+```
+rekey import auth/.env -p myapp -e staging --path /auth --dry-run   # names only, changes nothing
+rekey import auth/.env -p myapp -e staging --path /auth
+```
+
+It reads `NAME=value` lines (quotes, `export` and `# comments` are understood; multi-line values are
+not) and prints names and outcomes, never a value. Secrets that already exist are kept unless you pass
+`--overwrite`; empty values are skipped as placeholders; `--kind sealed` marks every imported secret
+sealed. On a protected environment each change becomes a change request. Delete or lock down the
+original `.env` once the values are in and a `rekey run` deploy works.
 
 ## 4. Pipelines: GitLab CI ID tokens
 

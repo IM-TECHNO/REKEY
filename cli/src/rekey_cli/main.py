@@ -6,13 +6,14 @@ import sys
 import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
+from importlib import metadata
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from rekey_cli import api as api_mod
-from rekey_cli import config, login
+from rekey_cli import config, envfile, login
 from rekey_cli import dynamic as dynamic_mod
 from rekey_cli import scan as scan_mod
 from rekey_cli.api import Api, CliError
@@ -20,6 +21,28 @@ from rekey_cli.api import Api, CliError
 app = typer.Typer(
     help="Rekey: fetch and inject secrets.", no_args_is_help=True, add_completion=False
 )
+
+
+def _show_version(show: bool) -> None:
+    if show:
+        try:
+            typer.echo(metadata.version("rekey-cli"))
+        except metadata.PackageNotFoundError:
+            typer.echo("unknown")
+        raise typer.Exit()
+
+
+@app.callback()
+def _root(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version", callback=_show_version, is_eager=True, help="Show the version and exit."
+        ),
+    ] = False,
+) -> None:
+    pass
+
 
 Project = Annotated[
     str, typer.Option("--project", "-p", envvar="REKEY_PROJECT", help="Project slug.")
@@ -266,6 +289,82 @@ def run(
     except FileNotFoundError as exc:
         raise CliError(f"command not found: {command[0]}") from exc
     sys.exit(result.returncode)
+
+
+@app.command("import")
+@_guard
+def import_cmd(
+    file: Annotated[Path, typer.Argument(help="A .env file to load.")],
+    project: Project = "",
+    env: EnvOpt = "",
+    path: PathOpt = "/",
+    kind: Annotated[str, typer.Option(help="plain, sealed or bool, for every secret.")] = "plain",
+    overwrite: Annotated[
+        bool, typer.Option("--overwrite", help="Replace secrets that already exist.")
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Show what would happen; change nothing.")
+    ] = False,
+) -> None:
+    """Load the NAME=value lines of a .env file as secrets.
+
+    Prints names and outcomes only, never a value. Existing secrets are left alone unless
+    --overwrite. On a protected environment each change waits for approval.
+    Example: rekey import auth/.env -p app -e prod --path /auth --dry-run
+    """
+    try:
+        text = file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise CliError(f"cannot read {file}: {exc.__class__.__name__}") from exc
+    try:
+        values, repeats = envfile.parse(text)
+    except CliError as exc:
+        raise CliError(f"{file}: {exc}") from exc
+    if kind not in ("plain", "sealed", "bool"):
+        raise CliError("--kind must be plain, sealed or bool")
+    where = "/" + path.strip("/")
+    client = _client()
+    base = _base(project, env)
+    existing = {
+        s["name"]
+        for s in client.json("GET", f"{base}/secrets", params={"prefix": where})
+        if s["path"] == where
+    }
+    if repeats:
+        typer.echo(f"note: {repeats} repeated name(s); the last value of each is used", err=True)
+    counts = {"added": 0, "replaced": 0, "kept": 0, "empty": 0, "queued": 0, "failed": 0}
+    for name, value in values.items():
+        if not value:
+            outcome = "empty"  # an empty value is a placeholder, not a secret
+        elif name in existing and not overwrite:
+            outcome = "kept"
+        elif dry_run:
+            outcome = "replaced" if name in existing else "added"
+        else:
+            try:
+                out = client.json(
+                    "PUT",
+                    f"{base}/secrets/{name}",
+                    params={"path": where},
+                    json={"value": value, "kind": kind},
+                )
+                if "change_request" in out:
+                    outcome = "queued"
+                else:
+                    outcome = "replaced" if name in existing else "added"
+            except CliError as exc:
+                typer.echo(f"{name}: failed ({exc})", err=True)
+                outcome = "failed"
+        counts[outcome] += 1
+        if outcome != "failed":
+            label = {"kept": "exists, kept", "empty": "empty, skipped"}.get(outcome, outcome)
+            if dry_run and outcome in ("added", "replaced"):
+                label = "would be " + label
+            typer.echo(f"{name}: {label}")
+    summary = ", ".join(f"{n} {k}" for k, n in counts.items() if n)
+    typer.echo(f"{'Dry run: ' if dry_run else ''}{summary or 'nothing to do'}.")
+    if counts["failed"]:
+        raise typer.Exit(1)
 
 
 dynamic_app = typer.Typer(

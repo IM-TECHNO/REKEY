@@ -427,3 +427,8 @@ def test_logout_revokes_and_clears(srv: FakeServer) -> None:
     assert res.exit_code == 0
     assert ("POST", "/v1/auth/logout", "Bearer rs_saved") in srv.calls
     assert config.load().token == ""
+
+
+def test_version_flag_prints_the_package_version(srv: FakeServer) -> None:
+    res = runner.invoke(app, ["--version"])
+    assert res.exit_code == 0 and res.output.strip().count(".") >= 1

@@ -280,3 +280,16 @@ restart, unseal) after any use. Everything done with it is audited as `bootstrap
    unpinned CI bindings, and so on). Pin the GitLab `project_id` on every CI binding.
 1. A restore drill, and a rekey drill with the real share holders.
 2. Decide who the superadmins are, and keep that list to a few people.
+
+## Releasing the CLI
+
+Bump `version` in `cli/pyproject.toml`, commit, then push a tag that matches it:
+
+```bash
+git tag cli-v0.1.0 && git push origin cli-v0.1.0
+```
+
+`.github/workflows/release-cli.yml` runs the CLI tests, builds a single-file Linux binary for amd64 and
+arm64 (PyInstaller, on Ubuntu 22.04 so it runs on older distributions), and publishes both with a
+`SHA256SUMS` file as a GitHub release. `scripts/install.sh` downloads from the latest release. The
+binaries need glibc, so Alpine users install with pipx instead.

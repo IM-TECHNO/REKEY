@@ -1,0 +1,62 @@
+# Build the Linux CLI binaries and publish them as a GitHub release when a tag like cli-v0.1.0 is
+# pushed. scripts/install.sh downloads these. The tag must match the version in cli/pyproject.toml.
+name: release-cli
+
+on:
+  push:
+    tags: ["cli-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-22.04 } # old glibc, so the binary runs on older distros
+          - { arch: arm64, runner: ubuntu-22.04-arm }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check the tag matches the package version
+        run: |
+          want="${GITHUB_REF_NAME#cli-v}"
+          have="$(python -c "import tomllib; print(tomllib.load(open('cli/pyproject.toml','rb'))['project']['version'])")"
+          [ "$want" = "$have" ] || { echo "tag $want != pyproject $have"; exit 1; }
+      - name: Test and build
+        run: |
+          pip install ./cli pyinstaller pytest
+          pytest -q cli/tests
+          pyinstaller --onefile --name "rekey-linux-${{ matrix.arch }}" \
+            --copy-metadata rekey-cli --distpath dist cli/packaging/entry.py
+          ./dist/rekey-linux-${{ matrix.arch }} --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rekey-linux-${{ matrix.arch }}
+          path: dist/rekey-linux-${{ matrix.arch }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum rekey-linux-* > SHA256SUMS
+          cat SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "Rekey CLI ${GITHUB_REF_NAME#cli-v}" \
+            --notes "Linux CLI binaries. Install: curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/scripts/install.sh | sh" \
+            rekey-linux-* SHA256SUMS
