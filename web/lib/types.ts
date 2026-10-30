@@ -11,6 +11,17 @@ export type SealStatus = {
   progress: number;
   threshold: number;
   dev_unseal?: boolean;
+  auto_unseal?: string;
+};
+
+export type AutoUnsealInfo = {
+  configured: "off" | "transit" | "aws-kms";
+  enabled: boolean;
+  provider: string;
+  key_ref: string;
+  since: string | null;
+  stale: string;
+  paused: boolean;
 };
 
 export type EnvInfo ={ slug: string; name: string; protected: boolean };
@@ -63,6 +74,47 @@ export type RotationInfo = {
   last_status: "" | "ok" | "error";
   last_error: string;
   last_version: number | null;
+};
+
+export type DynamicRoleInfo = {
+  id: string;
+  name: string;
+  kind: "postgres" | "mysql";
+  host: string;
+  port: number;
+  database: string;
+  user_host: string;
+  ssl: string;
+  admin_user: string;
+  admin_secret_name: string;
+  member_of: string;
+  default_ttl_minutes: number;
+  max_ttl_minutes: number;
+  max_active: number;
+  enabled: boolean;
+  active_leases: number;
+};
+
+export type LeaseInfo = {
+  id: string;
+  username: string;
+  identity: string;
+  created_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+  error: string;
+};
+
+export type DynamicCreds = {
+  lease_id: string;
+  username: string;
+  password: string;
+  host: string;
+  port: number;
+  database: string;
+  ssl: string;
+  kind: "postgres" | "mysql";
+  expires_at: string;
 };
 
 export type GrantInfo = {

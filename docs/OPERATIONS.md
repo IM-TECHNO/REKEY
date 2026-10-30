@@ -261,11 +261,12 @@ restart, unseal) after any use. Everything done with it is audited as `bootstrap
 
 ## What Rekey does not do (yet)
 
-- No automatic unseal for real deployments; each restart needs the shares (a development-only file
-  option exists, see above).
+- Automatic unseal is optional and off by default; without it each restart needs the shares
+  ([AUTO-UNSEAL.md](AUTO-UNSEAL.md); a development-only file option exists, see above).
 - One API process; no high availability.
-- Secret rotation covers Postgres and MySQL passwords and any key a webhook can issue; no dynamic
-  secrets, PKI or SSH certificates.
+- Secret rotation covers Postgres and MySQL passwords and any key a webhook can issue, and dynamic
+  secrets cover Postgres and MySQL accounts ([DYNAMIC-SECRETS.md](DYNAMIC-SECRETS.md)); no PKI or SSH
+  certificates. Scan repositories and logs for leaked values with `rekey scan` ([SCANNING.md](SCANNING.md)).
 - The unsealed key lives in Python process memory, which cannot be reliably wiped. The container
   disables core dumps and runs read-only without capabilities; keep the host patched and access limited.
 

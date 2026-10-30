@@ -18,6 +18,10 @@ dependencies = [
     "uvicorn>=0.30",
 ]
 
+[project.optional-dependencies]
+# AWS KMS auto-unseal (REKEY_AUTO_UNSEAL=aws-kms). Not needed for Vault/OpenBao Transit.
+aws = ["boto3>=1.34"]
+
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",

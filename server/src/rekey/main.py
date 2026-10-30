@@ -6,7 +6,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from rekey import anchor, devunseal, rotation, service
+from rekey import anchor, autounseal, devunseal, dynamic, rotation, service
 from rekey.api import router
 from rekey.auth_api import router as auth_router
 from rekey.changes import router as changes_router
@@ -32,18 +32,28 @@ def create_app(
         devunseal.check_allowed(settings)
         if settings.dev_unseal_file:
             await devunseal.try_unseal(app_)
+        autounseal.check_config(settings)
+        unseal_task: asyncio.Task[None] | None = None
+        if settings.auto_unseal != "off":
+            await autounseal.try_unseal(app_)
+            unseal_task = asyncio.create_task(autounseal.run_forever(app_))
         task: asyncio.Task[None] | None = None
         rot_task = asyncio.create_task(rotation.run_forever(app_))
+        dyn_task = asyncio.create_task(dynamic.run_forever(app_))
         if anchor.enabled(settings):
             if settings.audit_anchor_webhook:
                 anchor.check_webhook_url(settings.audit_anchor_webhook)
             task = asyncio.create_task(anchor.run_forever(settings, app_.state.sessionmaker, http))
         yield
         rot_task.cancel()
-        await asyncio.gather(rot_task, return_exceptions=True)
+        dyn_task.cancel()
+        await asyncio.gather(rot_task, dyn_task, return_exceptions=True)
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        if unseal_task is not None:
+            unseal_task.cancel()
+            await asyncio.gather(unseal_task, return_exceptions=True)
         if owns_client:
             await http.aclose()
 
@@ -52,16 +62,19 @@ def create_app(
     app.state.engine = make_engine(settings.database_url)
     app.state.sessionmaker = make_sessionmaker(app.state.engine)
     app.state.keyring = None
+    app.state.autounseal_paused = False  # set by an explicit seal: stays until the next restart
     app.state.oidc = Provider(settings, http)
     app.state.limiter = RateLimiter()
     app.state.rotation_connector = RoutingConnector()
     app.state.http = http
     app.state.rotation_locks = {}
+    app.state.dynamic_connector = dynamic.RoutingDynamic()
     app.include_router(router)
     app.include_router(auth_router)
     app.include_router(insights_router)
     app.include_router(changes_router)
     app.include_router(rotation_router)
+    app.include_router(dynamic.router)
 
     @app.middleware("http")
     async def no_store(request: Request, call_next):  # type: ignore[no-untyped-def]

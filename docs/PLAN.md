@@ -20,6 +20,10 @@ Phase (open source). See [IP-RULES.md](IP-RULES.md): clean-room, nothing copied.
 - Automatic rotation of Postgres and MySQL account passwords (scheduled, two-phase so the secret and the server agree), with an optional two-role mode that has no downtime.
 - Webhook rotation for API keys (signed request to your own service), and a development-only auto-unseal file.
 - Audit anchoring: the chain's head hash is copied to a file and/or webhook and checked on verify.
+- Dynamic secrets: short-lived Postgres/MySQL accounts per request, removed on expiry, with a CLI
+  (`rekey dynamic run`) and a UI page.
+- Secret scanning (`rekey scan`) for repositories and job logs.
+- Optional auto-unseal through Vault/OpenBao Transit or AWS KMS, with the shares as the fallback.
 - Docker images, compose with an nginx edge, Kubernetes manifests, operations runbook.
 
 ## Next (in rough order)
@@ -27,8 +31,8 @@ Phase (open source). See [IP-RULES.md](IP-RULES.md): clean-room, nothing copied.
 1. A restore drill. Deployment to-do: restrict ports 80/443 on the host to Cloudflare's ranges.
 2. Independent review of `server/src/rekey/crypto` and the key handling (a self-review is done:
    [SECURITY-REVIEW-2026-10.md](SECURITY-REVIEW-2026-10.md)).
-3. Auto-unseal for real deployments (a KMS or a second operator service), explicitly weighed against the model.
-4. More rotators (other databases), dynamic secrets, then PKI and SSH certificates, possibly via
+3. More auto-unseal providers (GCP KMS, Azure Key Vault) and lease renewal for dynamic secrets.
+4. More database types for rotation and dynamic secrets, then PKI and SSH certificates, possibly via
    OpenBao behind the `SecretStore` boundary.
-5. Secret scanning of repositories; Kubernetes operator / External Secrets provider.
+5. Kubernetes operator / External Secrets provider.
 6. High availability (shared rate-limit store, multiple unsealed replicas).

@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -48,6 +50,17 @@ class Settings(BaseSettings):
     # DEVELOPMENT ONLY: a file with one base64 unseal share per line; the server unseals itself at
     # start. It defeats the point of sealing, so it refuses to run with cookie_secure=true.
     dev_unseal_file: str = ""
+
+    # Auto-unseal: keep the key-encryption key wrapped by an external key service so the server can
+    # unseal itself at start (see autounseal.py and docs/AUTO-UNSEAL.md). off = unseal by shares.
+    auto_unseal: Literal["off", "transit", "aws-kms"] = "off"
+    auto_unseal_addr: str = ""  # transit: https://vault.example.com:8200
+    auto_unseal_token: str = ""  # transit: a token that may only encrypt/decrypt with the key
+    auto_unseal_token_file: str = ""  # transit: read the token from this file instead
+    auto_unseal_key: str = ""  # transit: key name; aws-kms: key id, ARN or alias
+    auto_unseal_mount: str = "transit"  # transit: where the engine is mounted
+    auto_unseal_namespace: str = ""  # transit: Vault Enterprise / OpenBao namespace
+    auto_unseal_region: str = ""  # aws-kms: region (empty = the usual AWS environment)
 
     session_ttl_minutes: int = 720
     ci_session_ttl_minutes: int = 15

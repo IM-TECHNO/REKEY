@@ -12,9 +12,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from rekey import anchor, audit, rbac, service
+from rekey import anchor, audit, autounseal, rbac, service
 from rekey.crypto import InvalidShares, Keyring, SealConfig, initialize
-from rekey.models import AuditEvent, Environment, EnvKey, Grant, Identity, Project, SealRow
+from rekey.models import (
+    AuditEvent,
+    AutoUnseal,
+    Environment,
+    EnvKey,
+    Grant,
+    Identity,
+    Project,
+    SealRow,
+)
 from rekey.ratelimit import RateLimiter, client_ip, limit, too_many
 from rekey.rbac import Principal
 
@@ -213,6 +222,7 @@ class StatusResponse(BaseModel):
     progress: int = 0
     threshold: int = 0
     dev_unseal: bool = False  # the shares are read from a file: for development only
+    auto_unseal: str = ""  # the key service that unseals this server at start, if enabled
 
 
 async def _status(request: Request, db: AsyncSession) -> StatusResponse:
@@ -221,8 +231,14 @@ async def _status(request: Request, db: AsyncSession) -> StatusResponse:
     if ring is None:
         return StatusResponse(initialized=False, sealed=True, dev_unseal=dev)
     have, need = ring.progress
+    auto = await db.get(AutoUnseal, 1)
     return StatusResponse(
-        initialized=True, sealed=ring.sealed, progress=have, threshold=need, dev_unseal=dev
+        initialized=True,
+        sealed=ring.sealed,
+        progress=have,
+        threshold=need,
+        dev_unseal=dev,
+        auto_unseal=auto.provider if auto else "",
     )
 
 
@@ -272,6 +288,8 @@ async def sys_unseal(request: Request, db: DB, body: UnsealRequest) -> StatusRes
 
 class RekeyResponse(InitResponse):
     env_keys_rewrapped: int
+    # Auto-unseal was on but the key service refused the new key, so it was switched off.
+    auto_unseal_disabled: bool = False
 
 
 @router.post("/sys/rekey")
@@ -289,10 +307,15 @@ async def sys_rekey(
     request.app.state.keyring = new_ring
     count = len((await db.execute(select(EnvKey.id))).scalars().all())
     await log(request, who.name, "sys.rekey", target=f"{body.threshold} of {body.shares}")
+    # The KEK changed, so the wrapped copy held by the key service is for the old one.
+    auto = await autounseal.rewrap_after_rekey(request.app, db, new_ring)
+    if auto == "disabled":
+        await log(request, who.name, "sys.auto-unseal.disable", target="rekey: key service failed")
     return RekeyResponse(
         shares=[base64.urlsafe_b64encode(p).decode() for p in parts],
         threshold=body.threshold,
         env_keys_rewrapped=count,
+        auto_unseal_disabled=auto == "disabled",
     )
 
 
@@ -301,8 +324,53 @@ async def sys_seal(request: Request, db: DB, who: Admin) -> StatusResponse:
     ring = await load_ring(request, db)
     if ring is not None:
         ring.seal()
+    # A deliberate seal sticks: auto-unseal stays quiet until the next restart.
+    request.app.state.autounseal_paused = True
     await log(request, who.name, "sys.seal")
     return await _status(request, db)
+
+
+class AutoUnsealState(BaseModel):
+    configured: str  # off | transit | aws-kms (the server's settings)
+    enabled: bool  # a wrapped key is stored
+    provider: str
+    key_ref: str
+    since: datetime | None
+    stale: str  # why the stored key cannot be used now ("" = fine)
+    paused: bool  # sealed on purpose: stays sealed until the next restart
+
+
+@router.get("/sys/auto-unseal")
+async def sys_auto_unseal_state(request: Request, db: DB, _: Admin) -> AutoUnsealState:
+    return AutoUnsealState(**await autounseal.describe(request.app, db))
+
+
+@router.post("/sys/auto-unseal")
+async def sys_auto_unseal_enable(
+    request: Request, db: DB, ring: Ring, who: Admin
+) -> AutoUnsealState:
+    """Wrap the key-encryption key with the configured key service so the server can unseal itself.
+
+    Needs the server unsealed (the key only exists in memory then)."""
+    try:
+        await autounseal.enable(request.app, db, ring, who.name)
+    except autounseal.AutoUnsealError as exc:
+        await log(request, who.name, "sys.auto-unseal.enable", "deny", target=str(exc))
+        raise HTTPException(
+            409 if isinstance(exc, autounseal.NotConfigured) else 502, str(exc)
+        ) from None
+    await log(
+        request, who.name, "sys.auto-unseal.enable", target=request.app.state.settings.auto_unseal
+    )
+    return AutoUnsealState(**await autounseal.describe(request.app, db))
+
+
+@router.delete("/sys/auto-unseal")
+async def sys_auto_unseal_disable(request: Request, db: DB, who: Admin) -> AutoUnsealState:
+    """Forget the wrapped key. From the next start the shares are needed again."""
+    await autounseal.disable(db)
+    await log(request, who.name, "sys.auto-unseal.disable")
+    return AutoUnsealState(**await autounseal.describe(request.app, db))
 
 
 # ---- projects -----------------------------------------------------------------------------

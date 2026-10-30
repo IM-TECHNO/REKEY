@@ -11,6 +11,8 @@ import typer
 
 from rekey_cli import api as api_mod
 from rekey_cli import config, login
+from rekey_cli import dynamic as dynamic_mod
+from rekey_cli import scan as scan_mod
 from rekey_cli.api import Api, CliError
 
 app = typer.Typer(
@@ -262,6 +264,136 @@ def run(
     except FileNotFoundError as exc:
         raise CliError(f"command not found: {command[0]}") from exc
     sys.exit(result.returncode)
+
+
+dynamic_app = typer.Typer(
+    help="Short-lived database accounts, created on request and removed on expiry.",
+    no_args_is_help=True,
+)
+app.add_typer(dynamic_app, name="dynamic")
+Role = Annotated[str, typer.Argument(help="Dynamic role name.")]
+Ttl = Annotated[
+    int | None, typer.Option("--ttl", min=1, help="Minutes the account lives (role default).")
+]
+
+
+@dynamic_app.command("creds")
+@_guard
+def dynamic_creds(
+    role: Role,
+    project: Project = "",
+    env: EnvOpt = "",
+    ttl: Ttl = None,
+    fmt: Annotated[str, typer.Option("--format", help="dotenv, json or url.")] = "dotenv",
+) -> None:
+    """Create an account and print its credentials. They are shown once; Rekey keeps no copy."""
+    creds = dynamic_mod.request_creds(_client(), _base(project, env), role, ttl)
+    typer.echo(dynamic_mod.render(creds, fmt))
+    typer.echo(f"rekey: lease {creds['lease_id']} expires {creds['expires_at']}", err=True)
+
+
+@dynamic_app.command("run", context_settings={"allow_interspersed_args": False})
+@_guard
+def dynamic_run(
+    role: Role,
+    command: Annotated[list[str], typer.Argument(help="Command to run, after --")],
+    project: Project = "",
+    env: EnvOpt = "",
+    ttl: Ttl = None,
+) -> None:
+    """Run COMMAND with a fresh account in its environment, then remove the account.
+
+    Sets PGHOST/PGUSER/PGPASSWORD (or MYSQL_*) and DB_HOST/DB_USER/DB_PASSWORD/DB_NAME.
+    Example: rekey dynamic run -p app -e dev readonly -- psql -c 'select 1'
+    """
+    if command and command[0] == "--":  # the separator arrives as an argument after ROLE
+        command = command[1:]
+    if not command:
+        raise CliError("give the command to run after the role, e.g. -- psql -c 'select 1'")
+    api, base = _client(), _base(project, env)
+    creds = dynamic_mod.request_creds(api, base, role, ttl)
+    child = {k: v for k, v in os.environ.items() if k not in ("REKEY_TOKEN", "REKEY_JWT")}
+    child.update(dynamic_mod.child_env(creds))
+    try:
+        result = subprocess.run(command, env=child, check=False)  # noqa: S603
+    except FileNotFoundError as exc:
+        raise CliError(f"command not found: {command[0]}") from exc
+    finally:
+        try:  # the account is useless once the command is done: take it away now
+            dynamic_mod.revoke(api, base, role, creds["lease_id"])
+        except CliError as exc:
+            typer.echo(
+                f"rekey: could not revoke the account early ({exc}); it expires on its own",
+                err=True,
+            )
+    sys.exit(result.returncode)
+
+
+@dynamic_app.command("revoke")
+@_guard
+def dynamic_revoke(
+    role: Role,
+    lease_id: Annotated[str, typer.Argument(help="Lease id printed by `creds`.")],
+    project: Project = "",
+    env: EnvOpt = "",
+) -> None:
+    """Remove an account before it expires."""
+    dynamic_mod.revoke(_client(), _base(project, env), role, lease_id)
+
+
+@dynamic_app.command("leases")
+@_guard
+def dynamic_leases(role: Role, project: Project = "", env: EnvOpt = "") -> None:
+    """List your live accounts for a role (all of them, for a superadmin)."""
+    rows = _client().json("GET", f"{_base(project, env)}/dynamic/{role}/leases")
+    for r in rows:
+        typer.echo(f"{r['id']}  {r['username']}  {r['identity']}  expires {r['expires_at']}")
+
+
+@app.command()
+def scan(
+    paths: Annotated[
+        list[str] | None, typer.Argument(help="Files or folders to scan (default: .). - is stdin.")
+    ] = None,
+    project: Project = "",
+    env: EnvOpt = "",
+    stdin: Annotated[
+        bool, typer.Option("--stdin", help="Also scan piped input, e.g. a log.")
+    ] = False,
+    min_length: Annotated[
+        int, typer.Option(min=1, help="Skip secrets shorter than this (they match too often).")
+    ] = 8,
+    exclude: Annotated[
+        list[str] | None, typer.Option("--exclude", help="Glob to skip; repeatable.")
+    ] = None,
+    no_encodings: Annotated[
+        bool, typer.Option("--no-encodings", help="Only look for the exact value.")
+    ] = False,
+) -> None:
+    """Fail if any secret value of an environment appears in files or piped text.
+
+    Exit 0 clean, 1 something found, 2 error. Never prints a value.
+    Example: rekey scan -p app -e dev . ; ./build.sh 2>&1 | rekey scan -p app -e dev --stdin
+    """
+    wanted = list(paths or [])
+    use_stdin = stdin or "-" in wanted
+    wanted = [p for p in wanted if p != "-"] or ([] if use_stdin else ["."])
+    try:
+        secrets, report = scan_mod.fetch_secrets(_client(), _base(project, env), min_length)
+        data = typer.get_binary_stream("stdin").read() if use_stdin else None
+        scan_mod.scan(
+            secrets,
+            report,
+            paths=wanted,
+            stdin_data=data,
+            excludes=list(exclude or []),
+            encodings=not no_encodings,
+        )
+    except CliError as exc:
+        typer.echo(f"rekey: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    scan_mod.render(report, min_length, typer.echo, lambda m: typer.echo(m, err=True))
+    raise typer.Exit(0 if report.clean else 1)
 
 
 if __name__ == "__main__":

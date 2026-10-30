@@ -16,6 +16,7 @@ async def test_status_before_init(client: AsyncClient) -> None:
         "progress": 0,
         "threshold": 0,
         "dev_unseal": False,
+        "auto_unseal": "",
     }
 
 

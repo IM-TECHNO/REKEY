@@ -22,6 +22,13 @@ feature gates. Self-hosted, Apache-2.0.
 - **Secret rotation**: change a Postgres or MySQL account's password on a schedule and store it as a new
   secret version, optionally with two alternating accounts so nothing breaks. For API keys of other
   services, a signed webhook asks your own small service for a new key on a schedule.
+- **Dynamic secrets**: a short-lived database account for each request (Postgres or MySQL), created on
+  demand, never stored, and removed when its time is up. See [docs/DYNAMIC-SECRETS.md](docs/DYNAMIC-SECRETS.md).
+- **Secret scanning**: `rekey scan` fails a pipeline if the value of any of your secrets shows up in a
+  repository or a job log. See [docs/SCANNING.md](docs/SCANNING.md).
+- **Auto-unseal (optional)**: unseal after a restart through Vault/OpenBao Transit or AWS KMS instead of
+  waiting for people, with the shares kept as the fallback. Off by default.
+  See [docs/AUTO-UNSEAL.md](docs/AUTO-UNSEAL.md).
 - **Audit**: every allowed and denied action, in a hash chain you can verify. Values are never logged.
 - **Insights**: reads per day, top readers, secret age, anomalies (new IP, denial bursts, failed logins).
 - **CLI**: `rekey run -p app -e dev -- npm start` injects secrets into a command's environment.

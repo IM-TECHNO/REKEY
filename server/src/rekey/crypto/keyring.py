@@ -12,6 +12,7 @@ from rekey.crypto import envelope, shamir
 from rekey.crypto.errors import DecryptionError, InvalidShares, SealedError
 
 _CHECK_PLAINTEXT = b"rekey-seal-check"
+_KEK_CHECK_PLAINTEXT = b"rekey-kek-check"
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,29 @@ class Keyring:
                 self._kek[i] = 0
         self._kek = None
         self._pending.clear()
+
+    # Auto-unseal: the KEK, wrapped by an external key service, replaces the shares at start.
+
+    def export_kek(self) -> bytes:
+        """A copy of the KEK, for wrapping by a key service. Raises SealedError when sealed."""
+        return self._require_kek()
+
+    def kek_check(self) -> bytes:
+        """A blob that only the right KEK opens, stored beside the wrapped KEK."""
+        return envelope.seal(self._require_kek(), _KEK_CHECK_PLAINTEXT, b"kek-check")
+
+    def load_kek(self, kek: bytes, check: bytes) -> None:
+        """Unseal with a KEK that was unwrapped elsewhere. Rejected unless `check` opens with it."""
+        if len(kek) != envelope.KEY_LEN:
+            raise InvalidShares("not a valid key")
+        try:
+            plain = envelope.open_(kek, check, b"kek-check")
+        except DecryptionError as exc:
+            raise InvalidShares("the key service returned the wrong key") from exc
+        if not hmac.compare_digest(plain, _KEK_CHECK_PLAINTEXT):
+            raise InvalidShares("the key service returned the wrong key")
+        self._pending.clear()
+        self._kek = bytearray(kek)
 
     def _require_kek(self) -> bytes:
         if self._kek is None:

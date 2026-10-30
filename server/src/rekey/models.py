@@ -39,6 +39,27 @@ class SealRow(Base):
     share_hashes: Mapped[bytes | None] = mapped_column(LargeBinary, default=None)
 
 
+class AutoUnseal(Base):
+    """The key-encryption key wrapped by an external key service (see autounseal.py).
+
+    Only present while auto-unseal is enabled. Useless without the key service: the wrapped blob
+    can only be opened by asking it, so a copy of the database alone unseals nothing.
+    """
+
+    __tablename__ = "auto_unseal"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    provider: Mapped[str] = mapped_column(String(16))  # transit | aws-kms
+    key_ref: Mapped[str] = mapped_column(String(300))  # which key wrapped it (not a secret)
+    wrapped_kek: Mapped[bytes] = mapped_column(LargeBinary)
+    kek_check: Mapped[bytes] = mapped_column(LargeBinary)  # tells a wrong unwrap from a right one
+    # SHA-256 of the seal record the KEK belongs to: a rekey replaces the KEK, so a row that was
+    # not re-wrapped afterwards no longer matches and is refused instead of loading a dead key.
+    seal_fingerprint: Mapped[str] = mapped_column(String(64))
+    created_by: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Identity(Base):
     """A person or machine that can authenticate with an API token."""
 
@@ -283,3 +304,52 @@ class Rotation(Base):
     last_version: Mapped[int | None] = mapped_column(Integer, default=None)
     created_by: Mapped[str] = mapped_column(String(200), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class DynamicRole(Base):
+    """A recipe for short-lived database accounts, created on demand and removed on expiry.
+
+    Nothing secret is stored here: the admin password lives in a secret, and the accounts'
+    passwords are returned once and never kept.
+    """
+
+    __tablename__ = "dynamic_role"
+    __table_args__ = (UniqueConstraint("environment_id", "name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_id)
+    environment_id: Mapped[str] = mapped_column(ForeignKey("environment.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(32))
+    kind: Mapped[str] = mapped_column(String(16), default="postgres")  # postgres | mysql
+    host: Mapped[str] = mapped_column(String(253))
+    port: Mapped[int] = mapped_column(Integer, default=5432)
+    database: Mapped[str] = mapped_column(String(63), default="postgres")
+    user_host: Mapped[str] = mapped_column(String(255), default="%", server_default="%")
+    ssl: Mapped[str] = mapped_column(String(16), default="require")
+    admin_user: Mapped[str] = mapped_column(String(63))
+    admin_secret_path: Mapped[str] = mapped_column(String(512), default="/")
+    admin_secret_name: Mapped[str] = mapped_column(String(256))
+    # The rights come from an existing role on the server; each new account is made a member of it.
+    member_of: Mapped[str] = mapped_column(String(63))
+    default_ttl_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    max_ttl_minutes: Mapped[int] = mapped_column(Integer, default=1440)
+    max_active: Mapped[int] = mapped_column(Integer, default=20)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class Lease(Base):
+    """One issued account, removed from the database at `expires_at` (or earlier on revoke)."""
+
+    __tablename__ = "dynamic_lease"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_id)
+    role_id: Mapped[str] = mapped_column(ForeignKey("dynamic_role.id", ondelete="CASCADE"))
+    username: Mapped[str] = mapped_column(String(63))
+    identity: Mapped[str] = mapped_column(String(200))  # who asked
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    error: Mapped[str] = mapped_column(String(500), default="")  # last failed removal
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (Index("ix_dynamic_lease_due", "revoked_at", "expires_at"),)
