@@ -278,7 +278,12 @@ async def test_required_group_is_enforced(idp: FakeIdp) -> None:
     async for c in build(idp, oidc_required_group="acme/engineering"):
         state, _ = await start_login(c, idp, mode="web")
         r = await c.get("/v1/auth/oidc/callback", params={"code": "a", "state": state})
-        assert r.status_code == 403
+        assert r.status_code == 302 and r.headers["location"] == "/?login_error=group"
+        assert "set-cookie" not in r.headers  # refused: no session
+        _, challenge = pkce_pair()
+        state, _ = await start_login(c, idp, mode="cli", port=PORT, challenge=challenge)
+        r = await c.get("/v1/auth/oidc/callback", params={"code": "a", "state": state})
+        assert r.status_code == 403 and "required group" in r.text
         idp.user["groups_direct"] = ["acme/engineering"]
         state, _ = await start_login(c, idp, mode="web")
         r = await c.get("/v1/auth/oidc/callback", params={"code": "a", "state": state})
@@ -324,9 +329,13 @@ async def test_disabling_an_identity_kills_sessions_and_blocks_login(
     assert (await c.post("/v1/identities/gitlab:alice/disable", headers=AUTH)).status_code == 204
     assert (await c.get("/v1/auth/whoami", headers=bearer(token))).status_code == 401
     state, _ = await start_login(c, idp, mode="web")
-    assert (
-        await c.get("/v1/auth/oidc/callback", params={"code": "a", "state": state})
-    ).status_code == 403
+    r = await c.get("/v1/auth/oidc/callback", params={"code": "a", "state": state})
+    assert r.status_code == 302 and r.headers["location"] == "/?login_error=disabled"
+    assert "set-cookie" not in r.headers  # no session
+    _, challenge = pkce_pair()
+    state, _ = await start_login(c, idp, mode="cli", port=PORT, challenge=challenge)
+    r = await c.get("/v1/auth/oidc/callback", params={"code": "a", "state": state})
+    assert r.status_code == 403  # the CLI flow keeps the plain error
 
 
 async def test_logout_revokes_the_session(c: AsyncClient, idp: FakeIdp) -> None:

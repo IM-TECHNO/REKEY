@@ -208,6 +208,22 @@ Fine, and usual: terminate TLS on the host's nginx and send everything to the st
 4. Check: sign in, then look at the IP column of the Audit log. It must be your address, not the
    nginx host's or a `172.x` address.
 
+### Behind Cloudflare (orange cloud)
+
+If the hostname is proxied by Cloudflare, your nginx sees a Cloudflare edge address (`172.64.0.0/13`,
+`162.158.0.0/15`, ...) instead of the visitor, and the audit log fills with those. Cloudflare sends the
+visitor in `CF-Connecting-IP`; make nginx believe that header, but only from Cloudflare's own ranges:
+
+```bash
+{ echo "# Cloudflare: trust the real client IP only from Cloudflare's ranges"; (curl -fsS https://www.cloudflare.com/ips-v4; echo; curl -fsS https://www.cloudflare.com/ips-v6) | grep . | sed 's/^/set_real_ip_from /; s/$/;/'; echo "real_ip_header CF-Connecting-IP;"; } | sudo tee /etc/nginx/conf.d/cloudflare-realip.conf
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+`$remote_addr` then holds the visitor, so the `proxy_set_header X-Forwarded-For $remote_addr;` line
+above passes the right address on. Cloudflare's ranges change now and then: re-run this occasionally.
+Also allow ports 80/443 only from those ranges in your firewall, or the origin can be reached around
+Cloudflare.
+
 ## Monitoring
 
 - `GET /health` for liveness. `GET /v1/sys/status` tells you if it is sealed (a sealed server after

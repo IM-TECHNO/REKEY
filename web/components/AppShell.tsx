@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Sidebar from "@/components/Sidebar";
 import TopBar from "@/components/TopBar";
 import { NotInitializedScreen, UnsealScreen } from "@/components/SealScreens";
@@ -9,6 +10,36 @@ import type { SealStatus } from "@/lib/types";
 
 function Centered({ children }: { children: React.ReactNode }) {
   return <div className="min-h-screen grid place-items-center p-8">{children}</div>;
+}
+
+// Why the server sent the browser back here (`?login_error=`): a fixed set, never echoed text.
+const loginProblems: Record<string, { title: string; text: string }> = {
+  group: {
+    title: "This account is not allowed to sign in",
+    text: "Rekey only accepts members of a specific GitLab group, and this account is not one. Ask a Rekey administrator to add you to that group, then sign in again. If you have several GitLab accounts, make sure you signed in with the right one.",
+  },
+  disabled: {
+    title: "This account is disabled",
+    text: "An administrator has turned this account off. Ask a Rekey administrator to enable it again.",
+  },
+};
+
+function LoginProblem() {
+  const [reason] = useState(() => {
+    try {
+      return new URLSearchParams(window.location.search).get("login_error") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const p = loginProblems[reason];
+  if (!p) return null;
+  return (
+    <div role="alert" className="mt-4 border border-danger/40 bg-danger/10 p-3 text-sm">
+      <p className="font-medium text-danger">{p.title}</p>
+      <p className="mt-1 text-muted">{p.text}</p>
+    </div>
+  );
 }
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
@@ -52,6 +83,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </span>
             <span className="text-lg font-semibold tracking-tight">Rekey</span>
           </div>
+          <LoginProblem />
           <p className="mt-4 text-sm text-muted">
             Sign in with your GitLab account. Access to secrets is granted per project and
             environment.

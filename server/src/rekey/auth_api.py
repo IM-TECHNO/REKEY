@@ -14,6 +14,7 @@ from sqlalchemy import delete, select
 
 from rekey import oidc, rbac, service
 from rekey.api import COOKIE, DB, Admin, Who, log
+from rekey.config import Settings
 from rekey.models import CiBinding, Identity, LoginCode, OidcState, Session
 from rekey.ratelimit import limit
 
@@ -89,6 +90,14 @@ def _groups(claims: dict[str, Any]) -> set[str]:
     return found
 
 
+def _refused(settings: Settings, mode: str, reason: str, detail: str) -> Response:
+    """A refused login. A browser lands back on the sign-in screen, which explains it in words
+    (`reason` is one of a fixed few, never echoed input); the CLI flow keeps the plain error."""
+    if mode != "web":
+        raise HTTPException(403, detail)
+    return RedirectResponse(f"{settings.ui_url or '/'}?{urlencode({'login_error': reason})}", 302)
+
+
 async def _identity_for(db: DB, claims: dict[str, Any]) -> Identity:
     sub = str(claims["sub"])
     identity = (
@@ -156,11 +165,11 @@ async def oidc_callback(
         await log(
             request, f"gitlab:{claims.get('nickname', '?')}", "auth.oidc", "deny", target="group"
         )
-        raise HTTPException(403, "not a member of the required group")
+        return _refused(settings, pending.mode, "group", "not a member of the required group")
     identity = await _identity_for(db, claims)
     if identity.disabled:
         await log(request, identity.name, "auth.oidc", "deny", target="disabled")
-        raise HTTPException(403, "account disabled")
+        return _refused(settings, pending.mode, "disabled", "account disabled")
     await log(request, identity.name, "auth.oidc", target=pending.mode)
 
     if pending.mode == "cli":
