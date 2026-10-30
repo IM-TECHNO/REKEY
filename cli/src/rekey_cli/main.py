@@ -127,21 +127,20 @@ def login_cmd(
         bool,
         typer.Option(
             "--no-browser",
-            help="Print a link to open on any device, then paste the code it shows. "
+            help="Print a link to open in any browser, on any device, and wait for you to sign in. "
             "Used automatically over SSH or without a desktop.",
         ),
     ] = False,
 ) -> None:
-    """Sign in with GitLab (over SSH: open a link elsewhere and paste the code)."""
+    """Sign in with GitLab (over SSH: open the link it prints in any browser)."""
     cfg = config.load()
     url = api_mod.normalise_server(server or os.environ.get("REKEY_SERVER") or cfg.server or "")
     if not url or url == "https://":
         raise CliError("pass --server https://...")
-    paste = None
-    if no_browser or _headless():
-        paste = lambda: typer.prompt("Paste the code shown after signing in")  # noqa: E731
     result = login.login(
-        Api(url, "", api_mod.make_http()), announce=lambda m: typer.echo(m, err=True), paste=paste
+        Api(url, "", api_mod.make_http()),
+        announce=lambda m: typer.echo(m, err=True),
+        poll=no_browser or _headless(),
     )
     config.save(config.Config(server=url, token=result["token"], expires_at=result["expires_at"]))
     typer.echo(f"Signed in as {result['identity']} (session until {result['expires_at']})")

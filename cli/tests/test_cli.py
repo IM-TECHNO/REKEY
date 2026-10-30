@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -27,6 +28,8 @@ class FakeServer:
         self.calls: list[tuple[str, str, str]] = []  # method, path, authorization
         self.export = {"FOO": "bar", "DB_URL": 'pg://u:p@h/"x"'}
         self.exchange_challenge = ""
+        self.polls = 0
+        self.signed_in_after_polls = 3
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         auth = request.headers.get("authorization", "")
@@ -41,6 +44,21 @@ class FakeServer:
             ok = body["jwt"] == "ci-jwt-value-that-is-long-enough"
             return httpx.Response(
                 200 if ok else 403, json={"token": "rs_ci", "detail": "no binding"}
+            )
+        if p == "/v1/auth/cli/poll":
+            body = json.loads(request.content)
+            digest = hashlib.sha256(body["verifier"].encode()).digest()
+            challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+            self.polls += 1
+            if self.polls < self.signed_in_after_polls or challenge != self.exchange_challenge:
+                return httpx.Response(202, json={"status": "pending"})
+            return httpx.Response(
+                200,
+                json={
+                    "token": "rs_user",
+                    "expires_at": "2999-01-01T00:00:00+00:00",
+                    "identity": "gitlab:alice",
+                },
             )
         if p == "/v1/auth/cli/exchange":
             body = json.loads(request.content)
@@ -405,14 +423,13 @@ def test_browser_login_times_out(srv: FakeServer) -> None:
         )
 
 
-def test_paste_login_prints_a_portless_link_and_exchanges_the_pasted_code(
-    srv: FakeServer,
-) -> None:
+def test_poll_login_prints_a_portless_link_and_waits_for_the_sign_in(srv: FakeServer) -> None:
     said: list[str] = []
+    pauses: list[float] = []
 
     def announce(m: str) -> None:
         said.append(m)
-        q = parse_qs(urlparse(m.split("\n  ", 1)[1]).query)
+        q = parse_qs(urlparse(m.split("\n  ", 1)[1].splitlines()[0]).query)
         assert "port" not in q and q["mode"] == ["cli"]  # nothing listens on this machine
         srv.exchange_challenge = q["challenge"][0]
 
@@ -420,26 +437,31 @@ def test_paste_login_prints_a_portless_link_and_exchanges_the_pasted_code(
         Api(SERVER, "", api_mod.make_http()),
         open_browser=lambda url: pytest.fail("must not open a browser"),
         announce=announce,
-        paste=lambda: "  one-time \n",
+        poll=True,
+        pause=pauses.append,
     )
-    assert result["token"] == "rs_user" and said
-    with pytest.raises(CliError, match="401"):
+    assert result["token"] == "rs_user" and said and srv.polls == 3
+    assert len(pauses) == 2  # waited twice, then the sign-in had happened
+
+
+def test_poll_login_gives_up_when_nobody_signs_in(srv: FakeServer) -> None:
+    srv.signed_in_after_polls = 10**6
+    with pytest.raises(CliError, match="timed out"):
         login.login(
             Api(SERVER, "", api_mod.make_http()),
-            announce=announce,
-            paste=lambda: "wrong-code",
+            announce=lambda m: None,
+            poll=True,
+            pause=lambda s: None,
         )
-    with pytest.raises(CliError, match="no code"):
-        login.login(Api(SERVER, "", api_mod.make_http()), announce=announce, paste=lambda: " ")
 
 
-def test_login_command_chooses_paste_over_ssh_or_with_the_flag(
+def test_login_command_polls_over_ssh_or_with_the_flag(
     srv: FakeServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seen: list[bool] = []
 
     def fake_login(api: Api, **kw: object) -> dict[str, str]:
-        seen.append(kw["paste"] is not None)
+        seen.append(bool(kw["poll"]))
         return {"token": "t", "expires_at": "2999-01-01T00:00:00+00:00", "identity": "gitlab:a"}
 
     monkeypatch.setattr(login, "login", fake_login)
@@ -483,10 +505,11 @@ def test_version_flag_prints_the_package_version(srv: FakeServer) -> None:
 
 
 def test_help_command_lists_commands_and_describes_one(srv: FakeServer) -> None:
-    top = runner.invoke(app, ["help"])
-    assert top.exit_code == 0 and "login" in top.output and "import" in top.output
-    one = runner.invoke(app, ["help", "import"])
-    assert one.exit_code == 0 and "--dry-run" in one.output
-    nested = runner.invoke(app, ["help", "dynamic", "run"])
-    assert nested.exit_code == 0 and "--renew" in nested.output
+    def text(args: list[str]) -> str:
+        # GitHub Actions makes Typer colour its help, and the escape codes split option names.
+        return re.sub(r"\x1b\[[0-9;]*m", "", runner.invoke(app, args).output)
+
+    assert "login" in text(["help"]) and "import" in text(["help"])
+    assert "--dry-run" in text(["help", "import"])
+    assert "--renew" in text(["help", "dynamic", "run"])
     assert runner.invoke(app, ["help", "nope"]).exit_code != 0

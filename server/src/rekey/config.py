@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     # Per client IP, per minute (0 disables a limit).
     rate_login_per_min: int = 20  # OIDC login redirect and callback
     rate_exchange_per_min: int = 10  # CLI one-time code exchange
+    rate_poll_per_min: int = 60  # CLI waiting for a browser sign-in elsewhere
     rate_ci_login_per_min: int = 60  # CI runners can share an address
     rate_unseal_per_min: int = 10
     # Failed authentications per client IP in five minutes before that IP is blocked for the rest

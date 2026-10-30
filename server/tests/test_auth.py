@@ -1,4 +1,3 @@
-import re
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
@@ -189,25 +188,24 @@ async def test_cli_login_validates_port_and_challenge(c: AsyncClient) -> None:
     assert r.status_code == 422  # no challenge
 
 
-async def test_cli_paste_login_shows_a_code_that_exchanges_once(
+async def test_cli_poll_login_hands_the_session_to_the_terminal_that_asked(
     c: AsyncClient, idp: FakeIdp
 ) -> None:
     verifier, challenge = pkce_pair()
+    poll = {"verifier": verifier}
+    assert (await c.post("/v1/auth/cli/poll", json=poll)).status_code == 202  # not signed in yet
     state, _ = await start_login(c, idp, mode="cli", challenge=challenge)  # no port
     r = await c.get("/v1/auth/oidc/callback", params={"code": "abc", "state": state})
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
-    match = re.search(r"<pre[^>]*>([A-Za-z0-9_-]{40,})</pre>", r.text)
-    assert match, r.text
-    code = match.group(1)
-    bad = await c.post("/v1/auth/cli/exchange", json={"code": code, "verifier": "x" * 43})
-    assert bad.status_code == 401  # the code alone is useless without the verifier
-    state, _ = await start_login(c, idp, mode="cli", challenge=challenge)
-    r = await c.get("/v1/auth/oidc/callback", params={"code": "abc", "state": state})
-    code = re.search(r"<pre[^>]*>([A-Za-z0-9_-]{40,})</pre>", r.text).group(1)  # type: ignore[union-attr]
-    ok = await c.post("/v1/auth/cli/exchange", json={"code": code, "verifier": verifier})
-    assert ok.status_code == 200 and ok.json()["token"]
-    again = await c.post("/v1/auth/cli/exchange", json={"code": code, "verifier": verifier})
-    assert again.status_code == 401  # single use
+    assert "Return to your terminal" in r.text
+    # another terminal, holding a different verifier, gets nothing
+    other, _ = pkce_pair()
+    assert (await c.post("/v1/auth/cli/poll", json={"verifier": other})).status_code == 202
+    ok = await c.post("/v1/auth/cli/poll", json=poll)
+    assert ok.status_code == 200 and ok.json()["token"] and ok.json()["identity"]
+    assert (await c.post("/v1/auth/cli/poll", json=poll)).status_code == 202  # single use
+    me = await c.get("/v1/auth/whoami", headers=bearer(ok.json()["token"]))
+    assert me.status_code == 200
 
 
 # ---- OIDC callback hardening --------------------------------------------------------------

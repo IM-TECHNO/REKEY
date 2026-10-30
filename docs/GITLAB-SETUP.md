@@ -64,10 +64,10 @@ rekey run -p myapp -e dev -- npm start
 ```
 
 `rekey login` normally opens a browser on the same machine. Over SSH, or on a server with no desktop,
-it instead prints a link: open it in any browser (your laptop), sign in with GitLab, and paste the
-code the page shows back into the terminal. The code works once, for 5 minutes, and is useless
-without the terminal that asked for it. `--no-browser` forces this. It needs the server to be
-updated first.
+it instead prints a link and waits, like `tailscale up`: open the link in any browser on any device,
+sign in with GitLab, and the terminal finishes by itself. Nothing is copied or pasted. The terminal
+proves it is the one that asked with a secret that never leaves it, so the link and the page are
+harmless to anyone else. It waits 5 minutes. `--no-browser` forces this mode.
 
 `.rekey.json` in a repo can hold `{"project": "myapp", "env": "dev"}` so the flags are optional.
 

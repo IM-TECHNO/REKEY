@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
@@ -24,7 +24,7 @@ BINDING_COOKIE = "rekey_oidc"
 BINDING_PATH = "/v1/auth/oidc"
 _STATE_TTL = timedelta(minutes=10)
 _CODE_TTL = timedelta(minutes=2)
-_PASTE_CODE_TTL = timedelta(minutes=5)  # a person copies it across, so allow a little longer
+_POLL_CODE_TTL = timedelta(minutes=5)  # the terminal collects it within a poll or two
 
 
 def _provider(request: Request) -> oidc.Provider:
@@ -184,15 +184,15 @@ async def oidc_callback(
                 code_hash=rbac.hash_token(one_time),
                 identity_id=identity.id,
                 cli_challenge=pending.cli_challenge,
-                expires_at=datetime.now(UTC) + (_PASTE_CODE_TTL if paste else _CODE_TTL),
+                expires_at=datetime.now(UTC) + (_POLL_CODE_TTL if paste else _CODE_TTL),
             )
         )
         await db.commit()
         if paste:
-            # Useless without the verifier only the requesting CLI holds, but still not cached.
+            # The terminal that started this login is polling for the code (see cli_poll); it
+            # proves it is that terminal with the verifier, so nothing secret is shown here.
             return HTMLResponse(
-                _CODE_PAGE.format(code=one_time),
-                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+                _DONE_PAGE, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
             )
         # Loopback only: the browser hands the one-time code to the CLI on this machine.
         target = f"http://127.0.0.1:{pending.cli_port}/callback?{urlencode({'code': one_time})}"
@@ -215,20 +215,34 @@ async def oidc_callback(
     return response
 
 
-_CODE_PAGE = (
+_DONE_PAGE = (
     "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
-    "<title>Rekey sign-in code</title><body style='font-family:sans-serif;max-width:40rem;"
-    "margin:3rem auto;padding:0 1rem'><h3>Signed in with GitLab</h3>"
-    "<p>Copy this code into the terminal where you ran <code>rekey login</code>. "
-    "It works once and expires in 5 minutes.</p>"
-    "<pre style='font-size:1.1rem;padding:1rem;border:1px solid #888;overflow-wrap:anywhere;"
-    "white-space:pre-wrap'>{code}</pre>"
+    "<title>Rekey</title><body style='font-family:sans-serif;max-width:40rem;margin:3rem auto;"
+    "padding:0 1rem'><h3>Signed in with GitLab</h3>"
+    "<p>Return to your terminal: <code>rekey login</code> finishes by itself. "
+    "You can close this tab.</p>"
 )
 
 
 class CliExchange(BaseModel):
     code: str
     verifier: str = Field(min_length=43, max_length=128)
+
+
+async def _redeem(request: Request, db: DB, row: LoginCode) -> dict[str, str]:
+    """Turn a valid one-time login code into a CLI session. The caller has deleted the row."""
+    identity = await db.get(Identity, row.identity_id)
+    if identity is None or identity.disabled:
+        raise HTTPException(403, "account disabled")
+    token, expires = await rbac.create_session(
+        db,
+        identity.id,
+        kind="user",
+        ttl_minutes=request.app.state.settings.session_ttl_minutes,
+        detail="cli",
+    )
+    await log(request, identity.name, "auth.cli")
+    return {"token": token, "expires_at": expires.isoformat(), "identity": identity.name}
 
 
 @router.post(
@@ -246,18 +260,32 @@ async def cli_exchange(request: Request, db: DB, body: CliExchange) -> dict[str,
     ):
         await log(request, "anonymous", "auth.cli", "deny")
         raise HTTPException(401, "invalid or expired code")
-    identity = await db.get(Identity, row.identity_id)
-    if identity is None or identity.disabled:
-        raise HTTPException(403, "account disabled")
-    token, expires = await rbac.create_session(
-        db,
-        identity.id,
-        kind="user",
-        ttl_minutes=request.app.state.settings.session_ttl_minutes,
-        detail="cli",
+    return await _redeem(request, db, row)
+
+
+class CliPoll(BaseModel):
+    verifier: str = Field(min_length=43, max_length=128)
+
+
+@router.post("/auth/cli/poll", dependencies=[Depends(limit("poll", "rate_poll_per_min"))])
+async def cli_poll(request: Request, db: DB, body: CliPoll) -> Response:
+    """For a terminal with no browser: it printed a login link, and asks here until the person has
+    signed in elsewhere. Only the holder of the verifier can collect the session, and an unknown
+    or unfinished login looks the same (pending), so this reveals nothing about other logins."""
+    row = (
+        (
+            await db.execute(
+                select(LoginCode).where(LoginCode.cli_challenge == oidc.s256(body.verifier))
+            )
+        )
+        .scalars()
+        .first()
     )
-    await log(request, identity.name, "auth.cli")
-    return {"token": token, "expires_at": expires.isoformat(), "identity": identity.name}
+    if row is None or rbac.aware(row.expires_at) <= datetime.now(UTC):
+        return JSONResponse({"status": "pending"}, status_code=202)
+    await db.delete(row)  # single use
+    await db.commit()
+    return JSONResponse(await _redeem(request, db, row))
 
 
 # ---- GitLab CI ID tokens (pipelines) ------------------------------------------------------
